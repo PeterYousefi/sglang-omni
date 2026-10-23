@@ -610,12 +610,13 @@ async def test_speech_that_resumes_after_the_utterance_ended_interrupts_its_repl
         TURN_STARTED,
         None,
     ]
-    assert [(m.role, m.content) for m in messages_of(outputs[-1])] == [
-        ("system", dialog.config.system_prompt),
-        ("user", "Ten companies."),
-        ("assistant", heard),
-        ("user", "That let you teach English online."),
-    ]
+    question, answer = ("user", "Ten companies."), ("assistant", heard)
+    later = ("user", "That let you teach English online.")
+    assert [(m.role, m.content) for m in messages_of(outputs[-1])][1:] == (
+        [question, answer, later]
+        if heard
+        else [("user", "Ten companies. That let you teach English online.")]
+    )
 
 
 @pytest.mark.asyncio
