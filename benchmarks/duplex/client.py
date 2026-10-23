@@ -58,6 +58,12 @@ TURN_BASED_TRANSPORT: dict[str, JsonValue] = {
     "after sglang.input_audio.drained, which follows the server's answer to the "
     "last utterance; no deadline other than the session timeout bounds that wait",
 }
+PLAYBACK_REPORT = (
+    "conversation.item.truncate on each response.done with status cancelled, with "
+    "audio_end_ms the part of that reply a zero-buffer player had played at its "
+    "receipt: each audio delta plays from the later of its arrival and the end of "
+    "the previous delta, and the cut drops what is still unplayed"
+)
 
 
 class TurnDetection(BaseModel):
@@ -102,11 +108,14 @@ async def run_session(
     profile: ProfileName = DEFAULT_PROFILE,
     turn_detection: TurnDetection | None = None,
     tail_s: float = LEGACY_TAIL_S,
+    report_playback: bool = False,
 ) -> None:
     """Save observations and failures; classification belongs to offline replay.
 
     turn_detection configures a legacy-protocol or turn-based session; tail_s is the
-    delay after the input end before a legacy-protocol session's liveness probe.
+    delay after the input end before a legacy-protocol session's liveness probe;
+    report_playback makes a turn-based session report each cancelled reply's played
+    audio as PLAYBACK_REPORT describes.
     """
     if not pcm or len(pcm) % 2:
         raise ValueError("Input must be nonempty PCM16")
@@ -131,6 +140,7 @@ async def run_session(
             },
         }
     input_s = len(pcm) / (2 * SAMPLE_RATE)
+    output_rate = PROFILES[profile].output_sample_rate
 
     receipts: list[SendReceipt] = []
     with trace_path.open("x", encoding="utf-8", buffering=1) as trace_file:
@@ -195,12 +205,14 @@ async def run_session(
                         "session.update",
                         "input_audio_buffer.append",
                         "sglang.input_audio.end",
+                        "conversation.item.truncate",
                         "session.close",
                     ],
                     *,
                     session: dict[str, JsonValue] | None = None,
                     audio: str | None = None,
                     sglang: InputAudioMetadata | None = None,
+                    truncate: dict[str, JsonValue] | None = None,
                 ) -> None:
                     event_id = uuid.uuid4().hex
                     event: dict[str, JsonValue] = {
@@ -217,6 +229,10 @@ async def run_session(
                         pass
                     if sglang is not None:
                         event["sglang"] = sglang
+                    else:
+                        pass
+                    if truncate is not None:
+                        event.update(truncate)
                     else:
                         pass
                     send_started_s = record("send", event)
@@ -248,6 +264,47 @@ async def run_session(
                         await asyncio.gather(*waiters, return_exceptions=True)
                     return receipt.is_set()
 
+                # note (luojiaxuan): the zero-buffer player of report_playback: when
+                # its cursor frees, and each reply's (start, seconds) deltas.
+                playout_cursor_s = 0.0
+                reply_audio: dict[str, list[tuple[float, float]]] = {}
+                reply_items: dict[str, str] = {}
+
+                async def report_played(event: dict[str, JsonValue], now_s: float) -> None:
+                    nonlocal playout_cursor_s
+                    event_type = event["type"]
+                    if event_type == "response.output_audio.delta":
+                        seconds = len(base64.b64decode(event["delta"])) / 2 / output_rate
+                        start_s = max(playout_cursor_s, now_s)
+                        playout_cursor_s = start_s + seconds
+                        reply_audio.setdefault(event["response_id"], []).append(
+                            (start_s, seconds)
+                        )
+                        reply_items[event["response_id"]] = event["item_id"]
+                    elif (
+                        event_type == "response.done"
+                        and event["response"]["status"] == "cancelled"
+                    ):
+                        response_id = event["response"]["id"]
+                        playout_cursor_s = min(playout_cursor_s, now_s)
+                        if response_id in reply_items:
+                            played_s = sum(
+                                min(seconds, max(0.0, now_s - start_s))
+                                for start_s, seconds in reply_audio[response_id]
+                            )
+                            await send(
+                                "conversation.item.truncate",
+                                truncate={
+                                    "item_id": reply_items[response_id],
+                                    "content_index": 0,
+                                    "audio_end_ms": int(played_s * 1000),
+                                },
+                            )
+                        else:
+                            pass
+                    else:
+                        pass
+
                 async def receive() -> None:
                     nonlocal fatal
                     async for frame in websocket:
@@ -262,7 +319,7 @@ async def run_session(
                                 raise ValueError("server event type must be a string")
                             else:
                                 pass
-                            record("receive", event)
+                            received_s = record("receive", event)
                         except ValueError as exc:
                             raise ValueError(
                                 "malformed server frame "
@@ -271,6 +328,10 @@ async def run_session(
                             ) from exc
                         latest[event_type] = event
                         seen.setdefault(event_type, asyncio.Event()).set()
+                        if report_playback:
+                            await report_played(event, received_s)
+                        else:
+                            pass
                         if event_type == "error":
                             # note (wenyao): Close waits for adapter teardown.
                             extension = event.get("sglang")
