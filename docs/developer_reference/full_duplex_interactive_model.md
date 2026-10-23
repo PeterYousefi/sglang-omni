@@ -349,6 +349,7 @@ A setting comes from one of three places: the profile file, read at launch; comm
 | `stages` | none | Settings of stage routes by stage name, such as `asr: {gpu: 0}` or `vad: {factory: {silence_duration_ms: 800}}`. |
 | `timeout_s` | `120` | How long one input or control operation on a cascade node may take, including the wait for the last replies once the input has ended; past it the session fails with `component '<name>' append timed out`. |
 | `unit_ms` | `200` | The length of the input audio units the server forwards into the session; reported as `native_unit_ms`. |
+| `max_sessions` | `16` | Sessions that every component node, the VAD node and the turn detection node hold at once. A session beyond them is refused when it opens; raise it, for example with `--max_sessions 32`, when the services have room for more. |
 | `max_output_lead_ms` | `1000` | How far ahead of real time reply audio is delivered; audio already delivered cannot be taken back by an interruption. |
 | `max_pending_output_chunks` | `1024` | Reply chunks held for a client that has stopped reading before the session fails. |
 | `max_pending_output_bytes` | `33554432` | The same bound in bytes. |
@@ -421,7 +422,7 @@ What needs a restart and what does not:
 
 | Setting | Changes |
 | --- | --- |
-| `services`, the node set, `inputs`, `session_publish`, `stages`, `timeout_s`, `unit_ms`, `max_output_lead_ms`, `max_pending_output_*` | Restart the server. |
+| `services`, the node set, `inputs`, `session_publish`, `stages`, `timeout_s`, `unit_ms`, `max_sessions`, `max_output_lead_ms`, `max_pending_output_*` | Restart the server. |
 | Default node options and VAD defaults | Restart, or per session as above. |
 | Node options through `nodes` | When a `/v1/session` session opens, and later through `configure` for nodes that read `input`. |
 | `sglang.sampling` | When a realtime session opens. |
@@ -612,7 +613,7 @@ Each rule is followed by the error it raises.
 - `nodes` in `session.update` — `invalid session configuration`.
 - `response.create` — `manual turn commands are not granted`.
 - `response.cancel` in a profile where no node takes `interrupt` from `input` on a control edge — `no node takes the control 'interrupt' from 'input'`.
-- A new session beyond the 16 that every cascade node holds at once — the first `session.update` is refused with `admission_rejected`.
+- A new session beyond the `max_sessions` (16 unless the profile or `--max_sessions` sets another) that every cascade node holds at once — the first `session.update` is refused with `admission_rejected`.
 - A `session.update` that changes `instructions`, or a `configure` that changes a node, while the user is speaking, between `speech_started` and `speech_stopped` — the session fails with `cannot replace '<node>' while speech is in progress`.
 
 ### Rejected by the speech service
