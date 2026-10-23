@@ -1308,6 +1308,38 @@ async def test_a_turn_interrupted_at_the_reader_takes_no_more_fragments():
     assert [entry.continues for entry in reader.pending] == [True, True]
 
 
+@pytest.mark.asyncio
+async def test_an_interrupt_drops_the_turns_unsent_fragments(monkeypatch):
+    sessions = SessionGraphRunner()
+    graph, reader = fragment_runtime(
+        sessions, SessionLimits(max_chunk_bytes=1024, max_pending_chunks=2)
+    )
+    controlled = []
+
+    async def control_session(*args, **kwargs) -> None:
+        controlled.append(args[0])
+
+    # note (luojiaxuan): the reader's node session has no running stages, so the control it forwards is recorded instead.
+    monkeypatch.setattr(sessions, "control_session", control_session)
+    delivery = asyncio.create_task(
+        sessions.append_fragments(graph, "reader", blob_unit(1, 5000), 0)
+    )
+    await wait_until(lambda: reader.pending_count == 2)
+    await sessions.control_edge(
+        graph,
+        "reader",
+        ControlEdge("writer", INTERRUPT),
+        replace(control_chunk(INTERRUPT, turn=1), format="session"),
+    )
+    assert await asyncio.wait_for(delivery, OUTPUT_TIMEOUT_S) == 2
+    assert (reader.pending_count, reader.pending_bytes, list(reader.pending)) == (
+        0,
+        0,
+        [],
+    )
+    assert controlled == [graph.nodes["reader"]]
+
+
 class BlobWriter(SessionHooks):
     """Makes each client chunk the unit of a new turn, a blob of the size the chunk names."""
 
