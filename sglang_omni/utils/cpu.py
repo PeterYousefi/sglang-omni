@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 GPU_LOCAL_CPUS_ENV = "SGLANG_OMNI_BIND_GPU_LOCAL_CPUS"
 _CGROUP_ROOT = Path("/sys/fs/cgroup")
 _PROC_SELF_CGROUP = Path("/proc/self/cgroup")
+PCI_DEVICES_ROOT = Path("/sys/bus/pci/devices")
 
 
 def read_self_cgroup_paths(proc_self_cgroup: Path) -> tuple[str | None, str | None]:
@@ -197,6 +198,34 @@ def native_worker_intraop_threads(worker_count: int) -> int:
     )
 
 
+def parse_cpu_list(text: str) -> set[int]:
+    """CPUs of a kernel CPU list such as 0-3,8,10-11."""
+    cpus: set[int] = set()
+    for part in text.strip().split(","):
+        if not part:
+            continue
+        else:
+            pass
+        first, _dash, last = part.partition("-")
+        cpus.update(range(int(first), int(last or first) + 1))
+    return cpus
+
+
+def pci_local_cpus(bus_id: str | bytes) -> set[int] | None:
+    """The CPUs sysfs lists as local to a PCI device, None when unreadable."""
+    if isinstance(bus_id, bytes):
+        bus_id = bus_id.decode()
+    else:
+        pass
+    # NVML writes an eight-digit PCI domain; sysfs names use four.
+    domain, _colon, address = bus_id.lower().partition(":")
+    path = PCI_DEVICES_ROOT / f"{domain[-4:]}:{address}" / "local_cpulist"
+    try:
+        return parse_cpu_list(path.read_text())
+    except (OSError, ValueError):
+        return None
+
+
 def gpu_local_cpus(logical_gpu_ids: Iterable[int]) -> set[int]:
     """CPUs NVML reports as closest to the given logical GPUs, empty when unknown."""
     pynvml = try_import_pynvml()
@@ -213,6 +242,15 @@ def gpu_local_cpus(logical_gpu_ids: Iterable[int]) -> set[int]:
             handle = get_device_handle(
                 pynvml, resolve_visible_device_id(gpu_id, visible)
             )
+            # note (rsi): NVML's affinity query is the device's local CPU list,
+            # but it gets there by moving the calling thread onto every CPU in
+            # turn, out of any reserved set; sysfs answers without moving it.
+            local_cpus = pci_local_cpus(pynvml.nvmlDeviceGetPciInfo(handle).busId)
+            if local_cpus is not None:
+                cpus.update(local_cpus)
+                continue
+            else:
+                pass
             for index, word in enumerate(
                 pynvml.nvmlDeviceGetCpuAffinity(handle, words)
             ):

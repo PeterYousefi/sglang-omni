@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from typing import ClassVar
+from typing import ClassVar, Literal
 
 from pydantic import Field
 
@@ -24,7 +24,9 @@ def default_stages() -> list[StageConfig]:
         StageConfig(
             name="preprocessing",
             process="preprocessing",
+            gpu=0,
             factory_path=f"{PACKAGE}.stages.create_preprocessing_executor",
+            factory=FactoryArgs(max_concurrency=4, reference_cache_entries=256),
             next="tts_engine",
         ),
         EngineStageConfig(
@@ -32,7 +34,26 @@ def default_stages() -> list[StageConfig]:
             process="tts_engine",
             gpu=0,
             factory_path=f"{PACKAGE}.stages.create_tts_engine_executor",
-            factory=FactoryArgs(max_seq_len=4096, enable_acoustic_graph=True),
+            factory=FactoryArgs(
+                max_seq_len=4096,
+                enable_acoustic_graph=True,
+                prefill_graph_token_counts=[
+                    64,
+                    96,
+                    128,
+                    160,
+                    192,
+                    224,
+                    256,
+                    288,
+                    320,
+                    384,
+                    448,
+                    512,
+                ],
+                prefill_graph_max_requests=32,
+                enable_async_decode=True,
+            ),
             engine=EngineArgs(
                 mem_fraction_static=0.75,
                 max_running_requests=32,
@@ -46,7 +67,8 @@ def default_stages() -> list[StageConfig]:
             name="vocoder",
             process="vocoder",
             gpu=0,
-            factory_path=f"{PACKAGE}.stages.create_vocoder_executor",
+            factory_path=f"{PACKAGE}.vocoder.create_vocoder_executor",
+            factory=FactoryArgs(graph_latent_steps=384),
             terminal=True,
         ),
     ]
@@ -63,6 +85,9 @@ class Ming3TTSPipelineConfig(PipelineConfig):
     }
     model_path: str
     entry_stage: str = "preprocessing"
+    # note (rsi): the three stage processes share one GPU; MPS runs their
+    # kernels concurrently instead of time-slicing the device between them.
+    mps: Literal["off", "on", "auto"] = "auto"
     placement: PlacementConfig = Field(
         default_factory=lambda: PlacementConfig(
             require_memory_fraction_for_colocation=False

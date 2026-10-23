@@ -5,14 +5,19 @@ from __future__ import annotations
 
 import base64
 import json
+import queue
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Literal, TypedDict
+from typing import Literal, Protocol, TypedDict
+from urllib.parse import unquote, urlparse
 
 import onnxruntime
 import torch
+import xxhash
 from pydantic import BaseModel, ConfigDict, JsonValue
 from safetensors import safe_open
 from sglang.srt.managers.schedule_batch import Req
+from sglang.srt.model_loader.utils import set_default_torch_dtype
 from sglang.srt.models.registry import ModelRegistry
 from sglang.srt.sampling.sampling_params import SamplingParams
 from sglang.srt.utils.hf_transformers.tokenizer import get_tokenizer
@@ -35,25 +40,32 @@ from sglang_omni.models.ming3_tts.model_runner import (
     StopPolicy,
 )
 from sglang_omni.models.ming3_tts.sglang_model import (
+    AGGREGATOR_WEIGHT_PREFIX,
     VOCODER_WEIGHT_PREFIX,
     Ming3DenseTTSConfig,
     Ming3DenseTTSModel,
     Ming3TTSConfig,
     Ming3TTSModel,
+    build_audio_aggregator,
 )
+from sglang_omni.modules.ming_audio.flow.aggregator import Aggregator
 from sglang_omni.modules.ming_audio.vae.configuration_audio_vae import AudioVAEconfig
 from sglang_omni.modules.ming_audio.vae.modeling_audio_vae import AudioVAE
 from sglang_omni.proto.request import StagePayload
 from sglang_omni.scheduling.bootstrap import create_sglang_infrastructure
+from sglang_omni.scheduling.generation_batch_policy import CudaGraphBackend
 from sglang_omni.scheduling.omni_scheduler import OmniScheduler
+from sglang_omni.scheduling.reference_encoder import (
+    KeyedReferenceEncodeHook,
+    ReferenceEncodeService,
+)
 from sglang_omni.scheduling.sglang_backend.output_processor import SGLangOutputProcessor
 from sglang_omni.scheduling.sglang_backend.server_args_builder import (
     build_sglang_server_args,
 )
 from sglang_omni.scheduling.simple_scheduler import SimpleScheduler
-from sglang_omni.utils.audio import load_audio
+from sglang_omni.utils.audio import decode_audio_data_uri, load_audio
 from sglang_omni.utils.audio_features import cached_fbank
-from sglang_omni.utils.audio_payload import audio_waveform_payload
 from sglang_omni.utils.checkpoint import resolve_checkpoint
 from sglang_omni.utils.device import resolve_concrete_device
 
@@ -98,14 +110,100 @@ class SpeechPrompt(TypedDict):
     speaker_embedding: torch.Tensor
     zero_speaker: bool
     prompt_latents: torch.Tensor | None
+    prompt_rows: torch.Tensor | None
     latent_position: int
+
+
+class PromptLatentInput(TypedDict):
+    reference_key: str
+    reference_audio: bytes
+    seed: int
+
+
+class PromptConditioning(TypedDict):
+    """Reference VAE latents and their aggregator rows, both [steps, dim] on CPU."""
+
+    prompt_latents: torch.Tensor
+    prompt_rows: torch.Tensor
+
+
+class SpeakerEncoder(Protocol):
+    def __call__(self, reference_audio: bytes | str) -> torch.Tensor: ...
+
+
+class PromptLatentEncoder(Protocol):
+    def __call__(
+        self, reference_audio: bytes | str, seed: int | None
+    ) -> PromptConditioning: ...
+
+
+class SpeakerEmbeddingHook(
+    KeyedReferenceEncodeHook[bytes | str, torch.Tensor, torch.Tensor, bytes | str]
+):
+    """Share one reference's speaker embedding across requests by audio content."""
+
+    model_revision = ""
+    encoder_id = "campplus"
+    artifact_kind = "speaker_embedding"
+
+    def __init__(self, encoder: SpeakerEncoder, *, model_identity: str) -> None:
+        self.encoder = encoder
+        self.model_id = model_identity
+        self.encoder_config_hash = ""
+
+    def input_key(self, item: bytes | str) -> str | None:
+        if isinstance(item, bytes):
+            return xxhash.xxh3_128_hexdigest(item)
+        else:
+            return None
+
+    def encode_one(self, item: bytes | str) -> torch.Tensor:
+        return self.encoder(item)
+
+    def store_artifact(self, artifact: torch.Tensor) -> torch.Tensor:
+        return artifact
+
+    def load_artifact(self, stored: torch.Tensor) -> torch.Tensor:
+        return stored
+
+
+class PromptLatentHook(
+    KeyedReferenceEncodeHook[
+        PromptLatentInput, PromptConditioning, PromptConditioning, PromptLatentInput
+    ]
+):
+    """Share a reference's VAE prompt latents across requests with the same seed."""
+
+    model_revision = ""
+    encoder_id = "audio_vae_prompt_latents"
+    artifact_kind = "prompt_latents"
+
+    def __init__(self, encoder: PromptLatentEncoder, *, model_identity: str) -> None:
+        self.encoder = encoder
+        self.model_id = model_identity
+        self.encoder_config_hash = ""
+
+    def input_key(self, item: PromptLatentInput) -> str:
+        return item["reference_key"]
+
+    def options_key(self, item: PromptLatentInput) -> str:
+        return str(item["seed"])
+
+    def encode_one(self, item: PromptLatentInput) -> PromptConditioning:
+        return self.encoder(item["reference_audio"], item["seed"])
+
+    def store_artifact(self, artifact: PromptConditioning) -> PromptConditioning:
+        return artifact
+
+    def load_artifact(self, stored: PromptConditioning) -> PromptConditioning:
+        return stored
 
 
 class DenseSpeechInputs(TypedDict):
     text: str
     speaker_embedding: torch.Tensor
     zero_speaker: bool
-    reference_waveform: torch.Tensor | None
+    prompt: PromptConditioning | None
     reference_text: str | None
 
 
@@ -124,39 +222,66 @@ def audio_section(configuration: dict[str, JsonValue]) -> dict[str, JsonValue]:
         return configuration["audio_config"]
 
 
-def load_audio_vae(checkpoint: Path, device: torch.device) -> tuple[AudioVAE, int]:
-    """Load the AudioVAE. Tiny checkpoints are sharded; 0.5B is one file."""
-    vae_configuration = audio_section(load_checkpoint_config(checkpoint))
-    for codec_section in ("enc_kwargs", "dec_kwargs"):
-        vae_configuration[codec_section]["backbone"]["_attn_implementation"] = "sdpa"
+def load_prefixed_weights(checkpoint: Path, prefix: str) -> dict[str, torch.Tensor]:
+    """Read the weights under prefix with it stripped. Tiny checkpoints are sharded."""
     index_path = checkpoint / "model.safetensors.index.json"
     if index_path.is_file():
         weight_index = json.loads(index_path.read_text())
         shard_names = {
             shard_name
             for weight_name, shard_name in weight_index["weight_map"].items()
-            if weight_name.startswith(VOCODER_WEIGHT_PREFIX)
+            if weight_name.startswith(prefix)
         }
     else:
         shard_names = {"model.safetensors"}
-    vocoder_weights: dict[str, torch.Tensor] = {}
+    weights: dict[str, torch.Tensor] = {}
     for shard_name in sorted(shard_names):
         with safe_open(str(checkpoint / shard_name), framework="pt") as shard:
             for weight_name in shard.keys():
-                if weight_name.startswith(VOCODER_WEIGHT_PREFIX):
-                    vocoder_weights[weight_name.removeprefix(VOCODER_WEIGHT_PREFIX)] = (
-                        shard.get_tensor(weight_name)
+                if weight_name.startswith(prefix):
+                    weights[weight_name.removeprefix(prefix)] = shard.get_tensor(
+                        weight_name
                     )
                 else:
                     pass
+    return weights
+
+
+def load_audio_vae(checkpoint: Path, device: torch.device) -> tuple[AudioVAE, int]:
+    """Load the bfloat16 AudioVAE with SDPA attention and its sample rate."""
+    vae_configuration = audio_section(load_checkpoint_config(checkpoint))
+    for codec_section in ("enc_kwargs", "dec_kwargs"):
+        vae_configuration[codec_section]["backbone"]["_attn_implementation"] = "sdpa"
     vae = AudioVAE(AudioVAEconfig(**vae_configuration)).eval()
-    vae.load_state_dict(vocoder_weights)
+    vae.load_state_dict(load_prefixed_weights(checkpoint, VOCODER_WEIGHT_PREFIX))
     vae.to(device=device, dtype=torch.bfloat16)
     return vae, int(vae_configuration["sample_rate"])
 
 
+def load_prompt_aggregator(
+    checkpoint: Path, configuration: dict[str, JsonValue], device: torch.device
+) -> Aggregator:
+    """Load the dense aggregator alone, built like the engine builds its copy."""
+    latent_dim = int(
+        configuration["audio_tokenizer_config"]["enc_kwargs"]["latent_dim"]
+    )
+    with set_default_torch_dtype(torch.bfloat16), device:
+        aggregator = build_audio_aggregator(
+            int(configuration["llm_config"]["hidden_size"]),
+            latent_dim,
+            configuration["aggregator_config"],
+        )
+    aggregator.load_state_dict(
+        load_prefixed_weights(checkpoint, AGGREGATOR_WEIGHT_PREFIX)
+    )
+    return aggregator.eval()
+
+
 def encode_reference_latents(
-    vae: AudioVAE, waveform: torch.Tensor, device: torch.device
+    vae: AudioVAE,
+    waveform: torch.Tensor,
+    device: torch.device,
+    generator: torch.Generator | None,
 ) -> torch.Tensor:
     """Pad a prompt on the left and return its VAE latents, shape [steps, dim]."""
     align = (
@@ -172,34 +297,20 @@ def encode_reference_latents(
         pass
     samples = samples.to(device=device, dtype=torch.bfloat16)
     length = torch.tensor([samples.shape[-1]], dtype=torch.long, device=device)
-    latents, _frame_count = vae.encode_latent(samples, length)
+    latents, _frame_count = vae.encode_latent(samples, length, generator=generator)
     return latents[0]
 
 
 def materialize_dense_prompt(
-    tokenizer: PreTrainedTokenizerBase,
-    prompt_vae: AudioVAE,
-    device: torch.device,
-    inputs: DenseSpeechInputs,
-    seed: int | None,
+    tokenizer: PreTrainedTokenizerBase, inputs: DenseSpeechInputs
 ) -> SpeechPrompt:
-    """Build the dense token ids after encoding a reference, when one is present."""
-    reference_text = inputs["reference_text"]
-    waveform = inputs["reference_waveform"]
-    if waveform is not None and reference_text:
-        if seed is not None:
-            torch.manual_seed(seed)
-        else:
-            pass
-        prompt_latents = encode_reference_latents(prompt_vae, waveform, device).cpu()
-        latent_steps = int(prompt_latents.shape[0])
-    else:
-        prompt_latents = None
-        latent_steps = 0
+    """Build the dense token ids around the reference's prompt latents, if any."""
+    prompt = inputs["prompt"]
+    latent_steps = 0 if prompt is None else int(prompt["prompt_latents"].shape[0])
     input_ids, speaker_position, latent_position = build_dense_speech_prompt(
         tokenizer,
         inputs["text"],
-        prompt_text=reference_text,
+        prompt_text=inputs["reference_text"],
         prompt_latent_steps=latent_steps,
         include_speaker=not inputs["zero_speaker"],
     )
@@ -208,7 +319,8 @@ def materialize_dense_prompt(
         speaker_position=speaker_position,
         speaker_embedding=inputs["speaker_embedding"],
         zero_speaker=inputs["zero_speaker"],
-        prompt_latents=prompt_latents,
+        prompt_latents=None if prompt is None else prompt["prompt_latents"],
+        prompt_rows=None if prompt is None else prompt["prompt_rows"],
         latent_position=latent_position,
     )
 
@@ -233,7 +345,35 @@ def build_speech_prompt(
     return input_ids, len(prefix_ids)
 
 
-def create_preprocessing_executor(model_path: str) -> SimpleScheduler:
+def read_reference_audio(reference: dict[str, JsonValue]) -> bytes | str:
+    """Return the reference bytes; a remote URL stays for load_audio to fetch."""
+    if "data" in reference:
+        return base64.b64decode(reference["data"], validate=True)
+    else:
+        source = reference["audio_path"]
+    decoded = decode_audio_data_uri(source)
+    if decoded is not None:
+        return decoded
+    elif source.startswith(("http://", "https://")):
+        return source
+    elif source.startswith("file://"):
+        return Path(unquote(urlparse(source).path)).read_bytes()
+    else:
+        return Path(source).read_bytes()
+
+
+def create_preprocessing_executor(
+    model_path: str,
+    *,
+    max_concurrency: int,
+    reference_cache_entries: int,
+    device: str | None = None,
+    gpu_id: int | None = None,
+) -> SimpleScheduler:
+    if max_concurrency < 1:
+        raise ValueError("Ming 3 TTS preprocessing max_concurrency must be positive")
+    else:
+        pass
     checkpoint = Path(resolve_checkpoint(model_path))
     configuration = load_checkpoint_config(checkpoint)
     dense = is_dense_checkpoint(configuration)
@@ -245,16 +385,94 @@ def create_preprocessing_executor(model_path: str) -> SimpleScheduler:
     tokenizer = get_tokenizer(str(checkpoint), trust_remote_code=False)
     if dense:
         validate_dense_tokenizer(tokenizer)
+        resolved_device = resolve_concrete_device(device, gpu_id)
+        prompt_vae, _sample_rate = load_audio_vae(checkpoint, resolved_device)
+        prompt_aggregator = load_prompt_aggregator(
+            checkpoint, configuration, resolved_device
+        )
+        # note (rsi): each new reference length builds a cuDNN attention plan
+        # for tens of milliseconds; memory-efficient attention has no such cost.
+        torch.backends.cuda.enable_cudnn_sdp(False)
     else:
-        pass
+        resolved_device = None
+        prompt_vae = None
+        prompt_aggregator = None
     session_options = onnxruntime.SessionOptions()
     session_options.intra_op_num_threads = SPEAKER_ENCODER_THREADS
-    speaker_encoder = onnxruntime.InferenceSession(
-        str(checkpoint / SPEAKER_ENCODER_FILE),
-        sess_options=session_options,
-        providers=["CPUExecutionProvider"],
+    # note (rsi): one session per worker keeps every run on its own two threads.
+    speaker_sessions = [
+        onnxruntime.InferenceSession(
+            str(checkpoint / SPEAKER_ENCODER_FILE),
+            sess_options=session_options,
+            providers=["CPUExecutionProvider"],
+        )
+        for _ in range(max_concurrency)
+    ]
+    speaker_input_name = speaker_sessions[0].get_inputs()[0].name
+    speaker_encoders: queue.SimpleQueue[onnxruntime.InferenceSession] = (
+        queue.SimpleQueue()
     )
-    speaker_input_name = speaker_encoder.get_inputs()[0].name
+    for speaker_session in speaker_sessions:
+        speaker_encoders.put(speaker_session)
+
+    def encode_speaker(reference_audio: bytes | str) -> torch.Tensor:
+        waveform = torch.from_numpy(
+            load_audio(reference_audio, target_sample_rate=SPEAKER_SAMPLE_RATE)
+        )
+        filterbank = cached_fbank(
+            waveform[None],
+            num_mel_bins=SPEAKER_MEL_BINS,
+            sample_frequency=SPEAKER_SAMPLE_RATE,
+        )
+        filterbank = filterbank - filterbank.mean(dim=0, keepdim=True)
+        speaker_encoder = speaker_encoders.get()
+        try:
+            speaker_vector = speaker_encoder.run(
+                None, {speaker_input_name: filterbank[None].numpy()}
+            )[0]
+        finally:
+            speaker_encoders.put(speaker_encoder)
+        return torch.from_numpy(speaker_vector).reshape(-1).float()
+
+    @torch.inference_mode()
+    def encode_prompt_latents(
+        reference_audio: bytes | str, seed: int | None
+    ) -> PromptConditioning:
+        prompt_waveform = torch.from_numpy(
+            load_audio(reference_audio, target_sample_rate=sample_rate)
+        )
+        # note (rsi): a private generator seeded like torch.manual_seed draws the
+        # same posterior noise without touching the process-wide RNG.
+        if seed is None:
+            generator = None
+        else:
+            generator = torch.Generator(device=resolved_device).manual_seed(seed)
+        prompt_latents = encode_reference_latents(
+            prompt_vae, prompt_waveform, resolved_device, generator
+        )
+        prompt_rows = prompt_aggregator(
+            prompt_latents.reshape(-1, 1, prompt_latents.shape[-1])
+        ).reshape(prompt_latents.shape[0], -1)
+        return PromptConditioning(
+            prompt_latents=prompt_latents.cpu(), prompt_rows=prompt_rows.cpu()
+        )
+
+    speaker_service = ReferenceEncodeService(
+        SpeakerEmbeddingHook(encode_speaker, model_identity=str(checkpoint)),
+        max_items=reference_cache_entries,
+        max_bytes=None,
+        log_prefix="Ming 3 TTS speaker cache",
+    )
+    latent_service = ReferenceEncodeService(
+        PromptLatentHook(encode_prompt_latents, model_identity=str(checkpoint)),
+        max_items=reference_cache_entries,
+        max_bytes=None,
+        log_prefix="Ming 3 TTS prompt latent cache",
+    )
+    # note (rsi): the CPU speaker encoder overlaps the GPU prompt-latent encode.
+    speaker_executor = ThreadPoolExecutor(
+        max_workers=max_concurrency, thread_name_prefix="ming3-speaker"
+    )
 
     def preprocess(payload: StagePayload) -> StagePayload:
         inputs = payload.request.inputs
@@ -268,42 +486,38 @@ def create_preprocessing_executor(model_path: str) -> SimpleScheduler:
             raise ValueError("Ming 3 TTS accepts at most one reference audio")
         else:
             pass
+        prompt = None
         if not references:
             speaker_embedding = torch.zeros(speaker_embedding_dim)
-            reference_waveform = None
             reference_text = None
         else:
             reference = references[0]
-            if "data" in reference:
-                reference_source = base64.b64decode(reference["data"], validate=True)
-            else:
-                reference_source = reference["audio_path"]
-            waveform = torch.from_numpy(
-                load_audio(reference_source, target_sample_rate=SPEAKER_SAMPLE_RATE)
-            )
-            filterbank = cached_fbank(
-                waveform[None],
-                num_mel_bins=SPEAKER_MEL_BINS,
-                sample_frequency=SPEAKER_SAMPLE_RATE,
-            )
-            filterbank = filterbank - filterbank.mean(dim=0, keepdim=True)
-            speaker_vector = speaker_encoder.run(
-                None, {speaker_input_name: filterbank[None].numpy()}
-            )[0]
-            speaker_embedding = torch.from_numpy(speaker_vector).reshape(-1).float()
+            reference_audio = read_reference_audio(reference)
             reference_text = reference.get("text") or None
             if dense and reference_text:
-                reference_waveform = torch.from_numpy(
-                    load_audio(reference_source, target_sample_rate=sample_rate)
+                speaker_job = speaker_executor.submit(
+                    speaker_service.get_or_encode, reference_audio
                 )
+                seed = payload.request.params.get("seed")
+                if seed is None or not isinstance(reference_audio, bytes):
+                    prompt = encode_prompt_latents(reference_audio, seed)
+                else:
+                    prompt = latent_service.get_or_encode(
+                        PromptLatentInput(
+                            reference_key=xxhash.xxh3_128_hexdigest(reference_audio),
+                            reference_audio=reference_audio,
+                            seed=seed,
+                        )
+                    )
+                speaker_embedding = speaker_job.result()
             else:
-                reference_waveform = None
+                speaker_embedding = speaker_service.get_or_encode(reference_audio)
         if dense:
             payload.data = DenseSpeechInputs(
                 text=text,
                 speaker_embedding=speaker_embedding,
                 zero_speaker=not references,
-                reference_waveform=reference_waveform,
+                prompt=prompt,
                 reference_text=reference_text,
             )
         else:
@@ -316,11 +530,12 @@ def create_preprocessing_executor(model_path: str) -> SimpleScheduler:
                 speaker_embedding=speaker_embedding,
                 zero_speaker=False,
                 prompt_latents=None,
+                prompt_rows=None,
                 latent_position=-1,
             )
         return payload
 
-    return SimpleScheduler(preprocess)
+    return SimpleScheduler(preprocess, max_concurrency=max_concurrency)
 
 
 def create_tts_engine_executor(
@@ -328,6 +543,9 @@ def create_tts_engine_executor(
     *,
     max_seq_len: int,
     enable_acoustic_graph: bool,
+    prefill_graph_token_counts: list[int],
+    prefill_graph_max_requests: int,
+    enable_async_decode: bool,
     device: str | None = None,
     gpu_id: int | None = None,
     tp_rank: int = 0,
@@ -358,7 +576,6 @@ def create_tts_engine_executor(
         maximum_decode_steps_limit = DENSE_MAXIMUM_DECODE_STEPS
         audio_patch_token_id = AUDIO_PATCH_TOKEN_ID
         audio_end_token_id = STOP_TOKEN_ID
-        prompt_vae, _sample_rate = load_audio_vae(Path(checkpoint), resolved_device)
     else:
         speech_config = SpeechConfig.model_validate(configuration["tts_config"])
         AutoConfig.register(Ming3TTSConfig.model_type, Ming3TTSConfig, exist_ok=True)
@@ -371,19 +588,29 @@ def create_tts_engine_executor(
         maximum_decode_steps_limit = speech_config.maximum_decode_steps
         audio_patch_token_id = speech_config.audio_patch_token_id
         audio_end_token_id = speech_config.audio_end_token_id
-        prompt_vae = None
     overrides = dict(server_args_overrides or {})
     overrides.update(
         tp_size=tp_size,
         trust_remote_code=False,
         json_model_override_args=json.dumps({"architectures": [backbone_architecture]}),
         disable_radix_cache=True,
-        chunked_prefill_size=-1,
+        # note (rsi): a new prompt joins the running decode rows in one forward,
+        # so the batch samples their latents in a single acoustic step.
+        chunked_prefill_size=max_seq_len,
+        enable_mixed_chunk=True,
     )
     if dense:
         # The checkpoint is bfloat16. SGLang otherwise downcasts a missing
         # dtype to float16, and this backbone overflows to NaN.
         overrides["dtype"] = "bfloat16"
+        # note (rsi): prefill embeds through staged input rows, so it replays
+        # one full CUDA graph per token bucket like the decode step.
+        overrides.setdefault("cuda_graph_backend_prefill", CudaGraphBackend.FULL)
+        overrides.setdefault("cuda_graph_bs_prefill", prefill_graph_token_counts)
+        overrides.setdefault(
+            "cuda_graph_config",
+            {"prefill": {"full_prefill_max_req": prefill_graph_max_requests}},
+        )
     else:
         pass
     server_args = build_sglang_server_args(
@@ -404,9 +631,7 @@ def create_tts_engine_executor(
         parameters = payload.request.params
         seed = parameters.get("seed")
         if dense:
-            prompt = materialize_dense_prompt(
-                tokenizer, prompt_vae, resolved_device, payload.data, seed
-            )
+            prompt = materialize_dense_prompt(tokenizer, payload.data)
         else:
             prompt = payload.data
         requested_steps = parameters.get("max_new_tokens")
@@ -448,10 +673,12 @@ def create_tts_engine_executor(
             eos_token_ids={audio_end_token_id},
         )
         request.tokenizer = tokenizer
+        # note (rsi): the history moves to the device with the prompt rows in
+        # the prefill, so admission never waits on the in-flight decode step.
         if prompt["prompt_latents"] is not None:
-            latent_history = prompt["prompt_latents"][-1:].to(resolved_device)
+            latent_history = prompt["prompt_latents"][-1:]
         else:
-            latent_history = torch.zeros((1, latent_dim), device=resolved_device)
+            latent_history = torch.zeros((1, latent_dim))
         return Ming3TTSRequestData(
             input_ids=prompt["input_ids"],
             req=request,
@@ -465,14 +692,22 @@ def create_tts_engine_executor(
             noise_generator=noise_generator,
             latent_history=latent_history,
             zero_speaker=prompt["zero_speaker"],
-            prompt_latents=prompt["prompt_latents"],
+            prompt_rows=prompt["prompt_rows"],
             latent_position=prompt["latent_position"],
         )
 
+    device_module = torch.get_device_module(resolved_device)
+    result_stream = device_module.Stream(device=resolved_device)
+
     def build_result(request: Ming3TTSRequestData) -> StagePayload:
         payload = request.stage_payload
+        # note (rsi): a finished request's latents are complete once its step
+        # resolved, so the copy runs on a side stream instead of waiting for
+        # the lookahead step already queued on the loop's stream.
+        with device_module.stream(result_stream):
+            latents = torch.stack(request.latents).float().cpu()
         payload.data = {
-            "latents": torch.stack(request.latents).float().cpu(),
+            "latents": latents,
             "usage": {
                 "prompt_tokens": len(request.input_ids),
                 "completion_tokens": len(request.output_ids),
@@ -503,32 +738,7 @@ def create_tts_engine_executor(
         model_runner=model_runner,
         request_builder=build_request,
         result_adapter=build_result,
-        enable_async_decode=False,
+        # note (rsi): a decode step launches before the previous one's host
+        # bookkeeping, which then runs while the GPU works.
+        enable_async_decode=enable_async_decode,
     )
-
-
-def create_vocoder_executor(
-    model_path: str,
-    *,
-    device: str | None = None,
-    gpu_id: int | None = None,
-) -> SimpleScheduler:
-    resolved_device = resolve_concrete_device(device, gpu_id)
-    checkpoint = Path(resolve_checkpoint(model_path))
-    vae, sample_rate = load_audio_vae(checkpoint, resolved_device)
-
-    @torch.inference_mode()
-    def decode(payload: StagePayload) -> StagePayload:
-        latents = payload.data["latents"].to(resolved_device, dtype=torch.bfloat16)
-        waveform, _, _ = vae.decode(latents.reshape(1, -1, latents.shape[-1]))
-        usage = payload.data["usage"]
-        payload.data = audio_waveform_payload(
-            waveform.float().cpu(),
-            sample_rate=sample_rate,
-            modality="audio",
-            source_hint="Ming-3.0-TTS",
-        )
-        payload.data["usage"] = usage
-        return payload
-
-    return SimpleScheduler(decode)
