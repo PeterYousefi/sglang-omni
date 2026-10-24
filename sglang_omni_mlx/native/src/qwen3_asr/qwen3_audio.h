@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Qwen3-ASR's audio prompt layout and its chunked log-mel features.
 #pragma once
 
 #include <vector>

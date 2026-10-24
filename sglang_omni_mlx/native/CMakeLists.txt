@@ -52,6 +52,7 @@ add_library(common STATIC
   src/common/form.cpp
   src/common/layers.cpp
   src/common/npz.cpp
+  src/common/text.cpp
   src/common/tokenizer.cpp)
 target_include_directories(common PUBLIC src)
 target_link_libraries(common PUBLIC mlx nlohmann_json::nlohmann_json pcre2-8-static

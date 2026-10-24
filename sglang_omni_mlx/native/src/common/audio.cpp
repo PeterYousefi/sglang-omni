@@ -14,8 +14,6 @@ namespace mx = mlx::core;
 
 namespace {
 
-constexpr float kLogMelFloor = 1e-10f;
-constexpr float kLogMelDynamicRange = 8.0f;
 constexpr float kPcm16FullScale = 32768.0f;
 constexpr uint16_t kWavFormatPcm = 1;
 constexpr uint16_t kWavFormatFloat = 3;

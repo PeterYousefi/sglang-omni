@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 #include "qwen3_asr/qwen3_audio.h"
 
 #include <cmath>
@@ -7,13 +8,6 @@
 namespace qwen3_asr {
 
 namespace mx = mlx::core;
-
-namespace {
-
-constexpr float kLogMelFloor = 1e-10f;
-constexpr float kLogMelDynamicRange = 8.0f;
-
-} // namespace
 
 mx::array LogMel(const std::vector<float> &samples, AudioLayout layout) {
   std::vector<float> padded_samples = samples;
@@ -46,11 +40,11 @@ mx::array LogMel(const std::vector<float> &samples, AudioLayout layout) {
   const mx::array filters(
       omni_common::MelFilterBank().data(),
       {omni_common::kFftSize / 2 + 1, omni_common::kMelBinCount}, mx::float32);
-  mx::array log_spectrum = mx::log10(
-      mx::maximum(mx::matmul(power, filters), mx::array(kLogMelFloor)));
-  log_spectrum =
-      mx::maximum(log_spectrum, mx::subtract(mx::max(log_spectrum),
-                                             mx::array(kLogMelDynamicRange)));
+  mx::array log_spectrum = mx::log10(mx::maximum(
+      mx::matmul(power, filters), mx::array(omni_common::kLogMelFloor)));
+  log_spectrum = mx::maximum(
+      log_spectrum, mx::subtract(mx::max(log_spectrum),
+                                 mx::array(omni_common::kLogMelDynamicRange)));
   return mx::transpose(
       mx::divide(mx::add(log_spectrum, mx::array(4.0f)), mx::array(4.0f)));
 }

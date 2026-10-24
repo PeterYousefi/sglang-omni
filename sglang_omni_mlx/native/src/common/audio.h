@@ -14,6 +14,9 @@ inline constexpr int kSampleRate = 16000;
 inline constexpr int kHopLength = 160;
 inline constexpr int kFftSize = 400;
 inline constexpr int kMelBinCount = 128;
+// Log-mel floor and the dynamic range kept below the loudest bin.
+inline constexpr float kLogMelFloor = 1e-10f;
+inline constexpr float kLogMelDynamicRange = 8.0f;
 // 16 kHz mono PCM16 or float32 WAV to float32 samples; throws
 // std::invalid_argument for anything else.
 std::vector<float> DecodeWav(std::string_view wav_bytes);

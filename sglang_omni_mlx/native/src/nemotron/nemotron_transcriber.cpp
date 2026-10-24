@@ -7,6 +7,7 @@
 #include <CoreFoundation/CoreFoundation.h>
 
 #include "common/swift_port.h"
+#include "common/text.h"
 
 namespace nemotron {
 
@@ -31,7 +32,7 @@ bool Contains(const std::string &text, const char *needle) {
 // clusters, so a space that a combining mark attaches to is not a space; a
 // word marker before a Thai vowel sign is one such piece.
 bool ContainsStandaloneSpace(const std::string &text) {
-  const std::vector<uint32_t> code_points = qwen3_asr::CodePoints(text);
+  const std::vector<uint32_t> code_points = omni_common::CodePoints(text);
   const CFCharacterSetRef combining =
       CFCharacterSetGetPredefined(kCFCharacterSetNonBase);
   for (size_t index = 0; index < code_points.size(); ++index) {

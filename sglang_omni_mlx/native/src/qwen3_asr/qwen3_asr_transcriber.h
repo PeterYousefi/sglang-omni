@@ -65,13 +65,6 @@ public:
 nlohmann::ordered_json
 SpeakerSegmentsJson(const std::vector<SpeakerSegment> &segments);
 
-bool IsUnicodeSpace(uint32_t code_point);
-std::vector<uint32_t> CodePoints(const std::string &text);
-// Strips every Unicode space from both ends.
-std::string StripUnicodeWhitespace(const std::string &text);
-// Greedy loop guard: the last 24 tokens use at most 3 distinct ids.
-bool IsTokenLoop(const std::vector<int> &output_ids);
-
 // The canonical prompt name for a Qwen3-ASR language code or name. Like
 // Voxt's Swift port, a name outside the table is used as given; blank is none.
 std::optional<std::string> NormalizeLanguage(const std::string &language);
