@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import check_golden
+import moss_tts_local_golden
 import music3_golden
 import pytest
 import voxtral_golden
@@ -129,6 +130,26 @@ def test_a_recorded_chip_requires_every_voxtral_code() -> None:
     }
     failures = voxtral_golden.check(speech_golden(), "Apple M5", changed)[1]
     assert failures == ["`en` differs from frame 1", "`fr` has frame count 1, not 2"]
+
+
+def test_a_recorded_chip_requires_moss_pcm_and_another_chip_does_not() -> None:
+    """Same codes but other PCM is a codec decoder change; only a recorded chip
+    can see it."""
+    recorded = {**SPEECH, "pcm_sha256": "aa"}
+    golden = {
+        **speech_golden(),
+        "kind": "moss_tts_local",
+        "devices": {
+            "Apple M5": {"metrics": {}, "clips": {"en": recorded, "fr": recorded}}
+        },
+    }
+    decoded_otherwise = {"en": {**recorded, "pcm_sha256": "bb"}, "fr": recorded}
+    assert moss_tts_local_golden.check(golden, "Apple M5", decoded_otherwise)[1] == [
+        "`en` has other PCM"
+    ]
+    assert (
+        moss_tts_local_golden.check(golden, "Apple M4 Pro", decoded_otherwise)[1] == []
+    )
 
 
 def test_another_chip_is_held_to_voxtral_prompt_ids() -> None:

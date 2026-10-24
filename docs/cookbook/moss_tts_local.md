@@ -340,7 +340,7 @@ Requests without reference audio work unchanged. The native server differs from 
 
 - Reference audio (`ref_audio`, `references`) is not supported yet and returns 400; `ref_text` alone is ignored, as on CUDA.
 - `response_format` is `wav` (48 kHz stereo) or `pcm` (mono, as on CUDA); `stream_format` must be `audio`.
-- `input` is at most 4096 characters, and `max_new_tokens`, `token_count` and `duration_tokens` at most `22500` frames (CUDA's streaming limit, 30 minutes).
+- `input` and `instructions` are at most 4096 characters. `max_new_tokens` is at most `4096` frames for a WAV or PCM file (about 5.5 minutes) and `22500` for a stream (CUDA's streaming limit, 30 minutes); `token_count`, `duration_tokens` and the `${token:N}` prefix are at most `22500`.
 - Out-of-range sampling fields (`temperature`, `top_p`, `top_k`, `repetition_penalty`) return 400, where CUDA returns 500.
 - Started with `--model-name`, it returns 404 for any other `model`; without that flag, `model` is ignored, as on CUDA.
 - Errors are `{"detail": "..."}`.

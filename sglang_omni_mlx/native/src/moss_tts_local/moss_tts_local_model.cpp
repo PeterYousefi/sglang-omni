@@ -131,7 +131,9 @@ mx::array PenalizeRepeats(const mx::array &logits,
 mx::array SampleIndex(const mx::array &logits,
                       const SamplingParameters &parameters, int top_k,
                       const std::optional<mx::array> &seen_codes) {
-  const bool sampled = parameters.temperature > 0;
+  // A temperature too small for a float divides by zero; it samples greedily.
+  const bool sampled = static_cast<float>(parameters.temperature) >=
+                       std::numeric_limits<float>::min();
   mx::array scores =
       sampled ? mx::divide(logits,
                            mx::array(static_cast<float>(parameters.temperature),

@@ -337,7 +337,23 @@ def test_moss_rejects_another_model_than_its_chosen_name() -> None:
         ({"input": "hi", "stream": True}, "stream=true requires response_format='pcm'"),
         ({"input": "hi", "stream_format": "sse"}, "stream_format must be audio"),
         ({"input": "hi", "max_new_tokens": 0}, "max_new_tokens must be greater than 0"),
-        ({"input": "hi", "max_new_tokens": 22501}, "max_new_tokens must be at most"),
+        (
+            {"input": "hi", "max_new_tokens": 4097},
+            "max_new_tokens must be at most 4096",
+        ),
+        (
+            {
+                "input": "hi",
+                "response_format": "pcm",
+                "stream": True,
+                "max_new_tokens": 22501,
+            },
+            "max_new_tokens must be at most 22500",
+        ),
+        (
+            {"input": "hi", "instructions": "x" * 4097},
+            "instructions must be at most 4096 characters",
+        ),
         ({"input": "hi", "max_new_tokens": 1.5}, "max_new_tokens must be an integer"),
         ({"input": "hi", "max_new_tokens": True}, "max_new_tokens must be an integer"),
         ({"input": "hi", "token_count": -1}, "token_count must be greater than 0"),

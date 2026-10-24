@@ -66,6 +66,9 @@ constexpr int kDefaultAudioFrames = 4096;
 // Note (Jiaxin Deng): the CUDA server's streaming limit, 30 minutes at 12.5
 // frames a second, here for every request.
 constexpr int kMaxAudioFrames = 22500;
+// A WAV or PCM file holds every sample at once, so a request for one stops at
+// the CUDA default, 4096 frames (about 5.5 minutes).
+constexpr int kMaxFileAudioFrames = 4096;
 constexpr int kMaxChunkFrames = 25;
 constexpr double kMinSpeed = 0.25;
 constexpr double kMaxSpeed = 4.0;
@@ -257,9 +260,10 @@ SplitTokenPrefix(const std::string &text) {
                                 std::to_string(kMaxAudioFrames));
   } else {
   }
-  const size_t text_start =
-      text.find_first_not_of(" \t\n\v\f\r", digits_end + 1);
-  return {text_start == std::string::npos ? "" : text.substr(text_start),
+  // As Python's str.lstrip, Unicode whitespace after the prefix goes too.
+  const std::string rest = text.substr(digits_end + 1);
+  const std::string stripped = qwen3_asr::StripUnicodeWhitespace(rest);
+  return {stripped.empty() ? "" : rest.substr(rest.find(stripped)),
           static_cast<int>(count)};
 }
 
@@ -287,6 +291,20 @@ OverrideSampling(moss_tts_local::SamplingParameters defaults,
   return defaults;
 }
 
+// Throws when text, a request field, is over kMaxInputCharacters characters.
+void CheckLength(const char *field, const std::string &text) {
+  const auto character_count =
+      std::count_if(text.begin(), text.end(), [](char byte) {
+        return (static_cast<unsigned char>(byte) & 0xc0) != 0x80;
+      });
+  if (static_cast<size_t>(character_count) > kMaxInputCharacters) {
+    throw std::invalid_argument(std::string(field) + " must be at most " +
+                                std::to_string(kMaxInputCharacters) +
+                                " characters");
+  } else {
+  }
+}
+
 SpeechRequest ParseRequest(const Json &body,
                            const moss_tts_local::MossTtsLocalModel &model) {
   if (!body.is_object()) {
@@ -300,16 +318,7 @@ SpeechRequest ParseRequest(const Json &body,
   } else {
   }
   const std::string text = input.get<std::string>();
-  const auto character_count =
-      std::count_if(text.begin(), text.end(), [](char byte) {
-        return (static_cast<unsigned char>(byte) & 0xc0) != 0x80;
-      });
-  if (static_cast<size_t>(character_count) > kMaxInputCharacters) {
-    throw std::invalid_argument("input must be at most " +
-                                std::to_string(kMaxInputCharacters) +
-                                " characters");
-  } else {
-  }
+  CheckLength("input", text);
 
   SpeechRequest request;
   const Json model_name = FieldOr(body, "model", Json());
@@ -403,12 +412,16 @@ SpeechRequest ParseRequest(const Json &body,
   }
   const Json instructions = FieldOr(body, "instructions", Json());
   if (!instructions.is_null()) {
+    // Note (Jiaxin Deng): capped as input is, so a long instruction cannot
+    // fill memory with prompt rows.
+    CheckLength("instructions", instructions.get<std::string>());
     request.prompt.instruction = instructions.get<std::string>();
   } else {
   }
 
   const std::optional<int> max_new_tokens =
-      PositiveInteger(body, "max_new_tokens", kMaxAudioFrames);
+      PositiveInteger(body, "max_new_tokens",
+                      request.stream ? kMaxAudioFrames : kMaxFileAudioFrames);
   const std::optional<int> token_count =
       PositiveInteger(body, "token_count", kMaxAudioFrames);
   const std::optional<int> duration_tokens =
