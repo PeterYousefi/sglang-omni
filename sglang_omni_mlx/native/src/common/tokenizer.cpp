@@ -216,20 +216,39 @@ struct Tokenizer::Pcre2Regex {
 
 Tokenizer::Tokenizer(const std::filesystem::path &model_directory)
     : split_pattern_(std::make_unique<Pcre2Regex>()) {
-  const nlohmann::json vocabulary =
-      nlohmann::json::parse(ReadFile(model_directory / "vocab.json"));
-  for (const auto &[token, id] : vocabulary.items()) {
-    vocabulary_.emplace(token, id.get<int>());
-  }
-  std::istringstream merges(ReadFile(model_directory / "merges.txt"));
-  std::string line;
-  int rank = 0;
-  while (std::getline(merges, line)) {
-    if (line.rfind("#version", 0) == 0 || line.empty()) {
-      continue;
-    } else {
+  if (std::filesystem::exists(model_directory / "vocab.json")) {
+    const nlohmann::json vocabulary =
+        nlohmann::json::parse(ReadFile(model_directory / "vocab.json"));
+    for (const auto &[token, id] : vocabulary.items()) {
+      vocabulary_.emplace(token, id.get<int>());
     }
-    merge_ranks_.emplace(line, rank++);
+    std::istringstream merges(ReadFile(model_directory / "merges.txt"));
+    std::string line;
+    int rank = 0;
+    while (std::getline(merges, line)) {
+      if (line.rfind("#version", 0) == 0 || line.empty()) {
+        continue;
+      } else {
+      }
+      merge_ranks_.emplace(line, rank++);
+    }
+  } else {
+    // Note (Jiaxin Deng): Fish S2-Pro ships only tokenizer.json, whose BPE
+    // model holds the vocabulary and the merges, each a pair of symbols.
+    const nlohmann::json model =
+        nlohmann::json::parse(ReadFile(model_directory / "tokenizer.json"))
+            .at("model");
+    for (const auto &[token, id] : model.at("vocab").items()) {
+      vocabulary_.emplace(token, id.get<int>());
+    }
+    int rank = 0;
+    for (const auto &merge : model.at("merges")) {
+      merge_ranks_.emplace(merge.is_string()
+                               ? merge.get<std::string>()
+                               : merge.at(0).get<std::string>() + " " +
+                                     merge.at(1).get<std::string>(),
+                           rank++);
+    }
   }
   const nlohmann::json config = nlohmann::json::parse(
       ReadFile(model_directory / "tokenizer_config.json"));

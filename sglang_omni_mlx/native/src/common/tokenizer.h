@@ -12,7 +12,8 @@ namespace qwen3_asr {
 
 class Tokenizer {
 public:
-  // Reads vocab.json, merges.txt and tokenizer_config.json from the checkpoint.
+  // Reads vocab.json, merges.txt and tokenizer_config.json from the
+  // checkpoint, or the vocabulary and merges from tokenizer.json without them.
   explicit Tokenizer(const std::filesystem::path &model_directory);
   ~Tokenizer();
   Tokenizer(const Tokenizer &) = delete;
