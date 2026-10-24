@@ -219,7 +219,7 @@ def test_vocoder_graphs_match_eager_decode_bit_for_bit(use_cuda: bool) -> None:
         "intermediate_size": 128,
         "num_attention_heads": 4,
         "num_key_value_heads": 2,
-        "num_hidden_layers": 2,
+        "num_hidden_layers": 4,
         "max_window_layers": 0,
         "use_sliding_window": True,
         "sliding_window": 16,
