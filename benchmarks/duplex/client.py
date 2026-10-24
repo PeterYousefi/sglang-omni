@@ -58,6 +58,16 @@ TURN_BASED_TRANSPORT: dict[str, JsonValue] = {
     "after sglang.input_audio.drained, which follows the server's answer to the "
     "last utterance; no deadline other than the session timeout bounds that wait",
 }
+# note (luojiaxuan): An end-of-input rule two compared clients can share: tail_silence_s of
+# zero PCM16 streamed after the input at the input's pace, the input end after that tail,
+# then at most end_wait_s for the server to finish before the close. A reply counts as
+# finished only if its response.done arrived before that input end.
+END_OF_INPUT_RULE = (
+    "tail_silence_s of zero PCM16 appended after the input, paced by media time; the "
+    "input end (EOS) after the tail; then at most end_wait_s for the server to finish "
+    "(sglang.input_audio.drained) before session.close; a reply is finished only if its "
+    "response.done arrived before the input end"
+)
 PLAYBACK_REPORT = (
     "conversation.item.truncate on each response.done with status cancelled, with "
     "audio_end_ms the part of that reply a zero-buffer player had played at its "
@@ -109,13 +119,17 @@ async def run_session(
     turn_detection: TurnDetection | None = None,
     tail_s: float = LEGACY_TAIL_S,
     report_playback: bool = False,
+    tail_silence_s: float = 0.0,
+    end_wait_s: float | None = None,
 ) -> None:
     """Save observations and failures; classification belongs to offline replay.
 
     turn_detection configures a legacy-protocol or turn-based session; tail_s is the
     delay after the input end before a legacy-protocol session's liveness probe;
     report_playback makes a turn-based session report each cancelled reply's played
-    audio as PLAYBACK_REPORT describes.
+    audio as PLAYBACK_REPORT describes; tail_silence_s and end_wait_s set the
+    end of input as END_OF_INPUT_RULE describes (end_wait_s None: only the session
+    timeout bounds the drain).
     """
     if not pcm or len(pcm) % 2:
         raise ValueError("Input must be nonempty PCM16")
@@ -139,7 +153,14 @@ async def run_session(
                 "input": {"turn_detection": turn_detection.model_dump(mode="json")}
             },
         }
-    input_s = len(pcm) / (2 * SAMPLE_RATE)
+    tail_bytes = round(tail_silence_s * SAMPLE_RATE) * 2
+    input_s = (len(pcm) + tail_bytes) / (2 * SAMPLE_RATE)
+    # note (luojiaxuan): The tail starts its own packets, so the input's appends stay
+    # exactly as without it.
+    packet_offsets = [*range(0, len(pcm), PACKET_BYTES)] + [
+        *range(len(pcm), len(pcm) + tail_bytes, PACKET_BYTES)
+    ]
+    stream = pcm + bytes(tail_bytes)
     output_rate = PROFILES[profile].output_sample_rate
 
     receipts: list[SendReceipt] = []
@@ -372,14 +393,17 @@ async def run_session(
                             pass
                         streamed = True
                         start_s = time.perf_counter()
-                        for sequence, byte_offset in enumerate(
-                            range(0, len(pcm), PACKET_BYTES)
-                        ):
+                        for sequence, byte_offset in enumerate(packet_offsets):
+                            packet_end = (
+                                len(pcm)
+                                if byte_offset < len(pcm)
+                                else len(stream)
+                            )
                             await asyncio.sleep(
                                 max(
                                     0.0,
                                     start_s
-                                    + sequence * PACKET_MS / 1000
+                                    + byte_offset / (2 * SAMPLE_RATE)
                                     - time.perf_counter(),
                                 )
                             )
@@ -391,7 +415,11 @@ async def run_session(
                             await send(
                                 "input_audio_buffer.append",
                                 audio=base64.b64encode(
-                                    pcm[byte_offset : byte_offset + PACKET_BYTES]
+                                    stream[
+                                        byte_offset : min(
+                                            byte_offset + PACKET_BYTES, packet_end
+                                        )
+                                    ]
                                 ).decode("ascii"),
                                 sglang={
                                     "seq": sequence,
@@ -421,7 +449,19 @@ async def run_session(
                             await settle("session.updated")
                         else:
                             await send("sglang.input_audio.end")
-                            await settle("sglang.input_audio.drained")
+                            if end_wait_s is None:
+                                await settle("sglang.input_audio.drained")
+                            else:
+                                try:
+                                    await asyncio.wait_for(
+                                        settle("sglang.input_audio.drained"),
+                                        end_wait_s,
+                                    )
+                                except asyncio.TimeoutError:
+                                    raise RuntimeError(
+                                        f"input not drained within {end_wait_s}s "
+                                        "of the input end"
+                                    ) from None
                     else:
                         pass
                     if legacy:

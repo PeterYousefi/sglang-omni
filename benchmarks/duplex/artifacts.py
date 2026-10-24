@@ -22,7 +22,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError
 
-from benchmarks.duplex.client import LEGACY_TAIL_S, TurnDetection
+from benchmarks.duplex.client import LEGACY_TAIL_S, SAMPLE_RATE, TurnDetection
 from benchmarks.duplex.oracle import evaluate_trace
 from benchmarks.duplex.oracle_models import TraceRecord
 from benchmarks.duplex.profiles import DEFAULT_PROFILE, PROFILES, ProfileName
@@ -112,6 +112,19 @@ def add_protocol_args(parser: argparse.ArgumentParser) -> None:
         help="Turn-based profiles: when a response.done cancels a reply, send "
         "conversation.item.truncate with the milliseconds of that reply the "
         "simulated zero-buffer player had played by then",
+    )
+    parser.add_argument(
+        "--tail-silence",
+        type=float,
+        default=0.0,
+        help="Seconds of zero PCM16 streamed after each input before the input end, "
+        "so a reply still open at the input's end can finish while input continues",
+    )
+    parser.add_argument(
+        "--end-wait",
+        type=float,
+        help="Most seconds to wait after the input end for the server to finish "
+        "before closing; without it only the session timeout bounds that wait",
     )
 
 
@@ -233,6 +246,7 @@ def replay_run(run_dir: Path) -> dict[str, JsonValue]:
         (run_dir / "manifest.json").read_text(encoding="utf-8")
     )
     input_errors: list[str] = []
+    pcm = b""
     try:
         pcm = artifact_path(run_dir, manifest.input.file).read_bytes()
         if hashlib.sha256(pcm).hexdigest() != manifest.input.sha256:
@@ -250,6 +264,16 @@ def replay_run(run_dir: Path) -> dict[str, JsonValue]:
     except (OSError, ValueError) as exc:
         input_errors.append(f"input artifact unavailable: {exc}")
 
+    # note (luojiaxuan): a run with an end-of-input tail sent that much zero PCM16
+    # after the input; a manifest without config.end_of_input declares none.
+    tail_silence_s = (manifest.config.get("end_of_input") or {}).get(
+        "tail_silence_s", 0.0
+    )
+    expected_sent_sha256 = (
+        hashlib.sha256(pcm + bytes(round(tail_silence_s * SAMPLE_RATE) * 2)).hexdigest()
+        if tail_silence_s
+        else manifest.input.sha256
+    )
     admission_retries = manifest.config.get("transport", {}).get("admission_retries")
     if admission_retries is None:
         input_errors.append("manifest lacks config.transport.admission_retries")
@@ -306,7 +330,7 @@ def replay_run(run_dir: Path) -> dict[str, JsonValue]:
                     errors.append("sent audio contains invalid base64")
             else:
                 pass
-        if sent_digest.hexdigest() != manifest.input.sha256:
+        if sent_digest.hexdigest() != expected_sent_sha256:
             errors.append("sent audio does not match persisted input PCM")
         else:
             pass

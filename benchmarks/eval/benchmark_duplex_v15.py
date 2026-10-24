@@ -41,6 +41,8 @@ def record(args: argparse.Namespace) -> int:
             turn_detection=args.turn_detection,
             legacy_tail_s=args.legacy_tail,
             report_playback=args.report_playback,
+            tail_silence_s=args.tail_silence,
+            end_wait_s=args.end_wait,
         )
     )
     manifest, _, _ = load_run(args.output)

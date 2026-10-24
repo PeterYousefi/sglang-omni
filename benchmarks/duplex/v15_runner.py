@@ -18,6 +18,7 @@ from pydantic import JsonValue
 import benchmarks.duplex.v15_dataset as v15_dataset
 from benchmarks.duplex.artifacts import replay_run, source_fingerprint
 from benchmarks.duplex.client import (
+    END_OF_INPUT_RULE,
     LEGACY_TAIL_S,
     LEGACY_TRANSPORT,
     MAX_TIMEOUT_S,
@@ -161,11 +162,14 @@ async def run_samples(
     turn_detection: TurnDetection | None = None,
     legacy_tail_s: float = LEGACY_TAIL_S,
     report_playback: bool = False,
+    tail_silence_s: float = 0.0,
+    end_wait_s: float | None = None,
 ) -> dict[str, JsonValue]:
     """Run selected sample variants, retaining failures in the selected denominator.
 
     turn_detection configures legacy-protocol and turn-based sessions and
-    legacy_tail_s legacy-protocol ones; see benchmarks.duplex.client.run_session.
+    legacy_tail_s legacy-protocol ones; tail_silence_s and end_wait_s set the end of
+    input; see benchmarks.duplex.client.run_session.
     """
     if not dataset_revision:
         raise ValueError("dataset_revision must be nonempty")
@@ -177,6 +181,10 @@ async def run_samples(
         pass
     if concurrency < 1:
         raise ValueError("concurrency must be at least 1")
+    else:
+        pass
+    if tail_silence_s < 0 or (end_wait_s is not None and end_wait_s <= 0):
+        raise ValueError("tail_silence_s must be nonnegative and end_wait_s positive")
     else:
         pass
     protocol = profile_protocol(profile, turn_detection)
@@ -205,6 +213,11 @@ async def run_samples(
         if protocol == "turn_based"
         else None
     )
+    end_of_input = {
+        "tail_silence_s": tail_silence_s,
+        "end_wait_s": end_wait_s,
+        "rule": END_OF_INPUT_RULE,
+    }
     variants = VARIANTS if variants is None else variants
     dataset_root = dataset_root.resolve()
     samples = dataset.discover_samples(dataset_root, sample_ids, max_per_subset)
@@ -275,6 +288,7 @@ async def run_samples(
                 "protocol": PROFILES[profile].protocol,
                 "legacy": legacy_config,
                 "turn_based": turn_based_config,
+                "end_of_input": end_of_input,
             },
             "samples": [
                 {
@@ -327,10 +341,14 @@ async def run_samples(
                     "sha256": hashlib.sha256(pcm).hexdigest(),
                     "duration_s": duration_s,
                 }
-                if duration_s + (legacy_tail_s if legacy else 0.0) >= timeout_s:
+                if (
+                    duration_s + tail_silence_s + (legacy_tail_s if legacy else 0.0)
+                    >= timeout_s
+                ):
                     variant_state["status"] = "invalid"
                     variant_state["errors"].append(
                         f"input duration {duration_s:.3f}s"
+                        + (f" plus tail silence {tail_silence_s}s" if tail_silence_s else "")
                         + (f" plus legacy tail {legacy_tail_s}s" if legacy else "")
                         + f" is not below timeout {timeout_s}s"
                     )
@@ -363,6 +381,7 @@ async def run_samples(
                             "protocol": PROFILES[profile].protocol,
                             "legacy": legacy_config,
                             "turn_based": turn_based_config,
+                            "end_of_input": end_of_input,
                         },
                         "input": {
                             "file": "input.pcm",
@@ -423,6 +442,8 @@ async def run_samples(
                     turn_detection=turn_detection,
                     tail_s=legacy_tail_s,
                     report_playback=report_playback,
+                    tail_silence_s=tail_silence_s,
+                    end_wait_s=end_wait_s,
                 )
                 # note (wenyao): trace parsing and WAV writes run off the loop so
                 # they do not stall the 80 ms pacing of the other open sessions.
