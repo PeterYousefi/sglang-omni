@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
-// The checkpoint's Qwen2 byte-level BPE tokenizer, with its added tokens.
+// The checkpoint's byte-level BPE tokenizer, with Qwen2's or GPT-2's split,
+// and its added tokens.
 #pragma once
 
 #include <filesystem>
@@ -10,10 +11,14 @@
 
 namespace qwen3_asr {
 
+// The regular expression that splits text into words before BPE.
+enum class SplitPattern { kQwen2, kGpt2 };
+
 class Tokenizer {
 public:
   // Reads vocab.json, merges.txt and tokenizer_config.json from the checkpoint.
-  explicit Tokenizer(const std::filesystem::path &model_directory);
+  explicit Tokenizer(const std::filesystem::path &model_directory,
+                     SplitPattern split_pattern = SplitPattern::kQwen2);
   ~Tokenizer();
   Tokenizer(const Tokenizer &) = delete;
   Tokenizer &operator=(const Tokenizer &) = delete;
@@ -43,6 +48,8 @@ private:
   std::vector<AddedToken> added_tokens_;
   std::unordered_map<int, size_t> added_token_index_by_id_;
   std::unique_ptr<Pcre2Regex> split_pattern_;
+  // Qwen2 text is NFC-normalized before the split; GPT-2 text is not.
+  bool normalizes_nfc_;
 };
 
 } // namespace qwen3_asr

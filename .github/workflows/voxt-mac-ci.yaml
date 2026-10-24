@@ -185,7 +185,7 @@ jobs:
           CI_DATA_ROOT: ${{ env.VOXT_CI_ROOT }}/data
         run: |
           "$VOXT_CI_ROOT/venv/bin/python" -m pytest -q sglang_omni_mlx/native/ci/test_model_servers.py \
-            sglang_omni_mlx/native/ci/test_voxtral_tts_api.py
+            sglang_omni_mlx/native/ci/test_voxtral_tts_api.py sglang_omni_mlx/native/ci/test_chatterbox_api.py
 
       - name: Archive tested native runtime
         if: success()

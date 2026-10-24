@@ -22,6 +22,7 @@ from typing import Callable
 # (runtime bin, data root, golden file, manifest of the clips to run) -> outputs
 TranscribeCorpus = Callable[[Path, Path, dict, dict[str, dict]], dict[str, dict]]
 
+import chatterbox_golden
 import sortformer_golden
 import vad_golden
 import voxtral_golden
@@ -269,6 +270,13 @@ def run(transcribe_corpus: TranscribeCorpus) -> None:
             golden["cases"],
         )
         metrics = {}
+    elif golden.get("kind") == "chatterbox":
+        results = chatterbox_golden.synthesize_cases(
+            arguments.runtime_bin,
+            model_directory(arguments.data_root, golden["model"]),
+            golden["cases"],
+        )
+        metrics = {}
     else:
         results = transcribe_corpus(
             arguments.runtime_bin, arguments.data_root, golden, manifest
@@ -308,6 +316,8 @@ def run(transcribe_corpus: TranscribeCorpus) -> None:
         pass
     if golden.get("kind") == "voxtral_tts":
         report(*voxtral_golden.check(golden, device, results))
+    elif golden.get("kind") == "chatterbox":
+        report(*chatterbox_golden.check(golden, device, results))
     else:
         report(*check(golden, device, results, metrics))
 

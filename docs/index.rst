@@ -143,6 +143,7 @@ Supported Models
    cookbook/zonos2.md
    cookbook/arkasr.md
    cookbook/voxtral_tts.md
+   cookbook/chatterbox_turbo.md
    cookbook/dots_tts.md
    cookbook/llada2_uni.md
    cookbook/ming_tts.md

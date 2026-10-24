@@ -23,6 +23,9 @@ namespace {
 constexpr const char *kQwen2SplitPattern =
     R"((?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\r\n\p{L}\p{N}]?\p{L}+|\p{N})"
     R"(| ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+)";
+// GPT-2's byte-level split, which GPT-2 vocabularies such as Chatterbox's keep.
+constexpr const char *kGpt2SplitPattern =
+    R"('s|'t|'re|'ve|'m|'ll|'d| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+)";
 
 std::string ReadFile(const std::filesystem::path &path) {
   std::ifstream stream(path, std::ios::binary);
@@ -214,8 +217,10 @@ struct Tokenizer::Pcre2Regex {
   }
 };
 
-Tokenizer::Tokenizer(const std::filesystem::path &model_directory)
-    : split_pattern_(std::make_unique<Pcre2Regex>()) {
+Tokenizer::Tokenizer(const std::filesystem::path &model_directory,
+                     SplitPattern split_pattern)
+    : split_pattern_(std::make_unique<Pcre2Regex>()),
+      normalizes_nfc_(split_pattern == SplitPattern::kQwen2) {
   const nlohmann::json vocabulary =
       nlohmann::json::parse(ReadFile(model_directory / "vocab.json"));
   for (const auto &[token, id] : vocabulary.items()) {
@@ -265,10 +270,13 @@ Tokenizer::Tokenizer(const std::filesystem::path &model_directory)
   int error_code = 0;
   PCRE2_SIZE error_offset = 0;
   split_pattern_->code = pcre2_compile(
-      reinterpret_cast<PCRE2_SPTR>(kQwen2SplitPattern), PCRE2_ZERO_TERMINATED,
-      PCRE2_UTF | PCRE2_UCP, &error_code, &error_offset, nullptr);
+      reinterpret_cast<PCRE2_SPTR>(split_pattern == SplitPattern::kGpt2
+                                       ? kGpt2SplitPattern
+                                       : kQwen2SplitPattern),
+      PCRE2_ZERO_TERMINATED, PCRE2_UTF | PCRE2_UCP, &error_code, &error_offset,
+      nullptr);
   if (split_pattern_->code == nullptr) {
-    throw std::runtime_error("cannot compile the Qwen2 split pattern");
+    throw std::runtime_error("cannot compile the tokenizer's split pattern");
   } else {
   }
 }
@@ -320,7 +328,8 @@ void Tokenizer::EncodeOrdinary(const std::string &raw_text,
     return;
   } else {
   }
-  const std::string text = NormalizeNfc(raw_text);
+  // Note (Jiaxin Deng): GPT-2 vocabularies have no normalizer.
+  const std::string text = normalizes_nfc_ ? NormalizeNfc(raw_text) : raw_text;
   pcre2_match_data *match_data =
       pcre2_match_data_create_from_pattern(split_pattern_->code, nullptr);
   const auto subject = reinterpret_cast<PCRE2_SPTR>(text.data());
