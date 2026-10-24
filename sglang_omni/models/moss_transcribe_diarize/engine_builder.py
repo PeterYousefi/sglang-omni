@@ -26,6 +26,7 @@ from sglang_omni.scheduling.engine_factory import (
 from sglang_omni.scheduling.generation_batch_policy import (
     CudaGraphBackend,
     build_default_prefill_cuda_graph_bs,
+    get_prefill_cuda_graph_backend,
 )
 
 if TYPE_CHECKING:
@@ -108,6 +109,7 @@ class MossTranscribeDiarizeEngineBuilder(
         self.audio_encoder_service: BatchedAudioEncoderService | None = None
         self.max_new_tokens = 0
         self.context_length = 0
+        self.full_prefill_enabled = False
 
     def pre_infra_setup(self, checkpoint_dir: str) -> None:
         from transformers import AutoProcessor
@@ -198,7 +200,11 @@ class MossTranscribeDiarizeEngineBuilder(
         *,
         generation_cuda_graph_enabled: bool,
     ) -> None:
-        del server_args
+        self.full_prefill_enabled = (
+            generation_cuda_graph_enabled
+            and current_platform.is_cuda()
+            and get_prefill_cuda_graph_backend(server_args) == CudaGraphBackend.FULL
+        )
         input_feature_len = int(self.processor.feature_extractor.nb_max_frames)
         if self.encoder_torch_compile:
             model.compile_encoder(self.encoder_chunk_buckets, input_feature_len)
@@ -238,7 +244,7 @@ class MossTranscribeDiarizeEngineBuilder(
     def extra_scheduler_kwargs(
         self,
     ) -> SchedulerExtras[MossTranscribeDiarizeRequestData]:
-        return {
+        scheduler_kwargs: SchedulerExtras[MossTranscribeDiarizeRequestData] = {
             "stream_output_builder": (
                 request_builders.make_moss_transcribe_diarize_stream_output_builder(
                     tokenizer=self.tokenizer,
@@ -249,7 +255,7 @@ class MossTranscribeDiarizeEngineBuilder(
             "async_decode_min_batch_size": self.async_decode_min_batch_size,
             # The scheduler otherwise idles on every prefill's sampled-token
             # copy while the next decode could already launch.
-            "async_prefill": self.enable_async_decode and current_platform.is_cuda(),
+            "async_prefill": self.enable_async_decode and self.full_prefill_enabled,
             "prefill_coalesce_requests": self.prefill_coalesce_requests,
             "prefill_coalesce_wait_ms": self.prefill_coalesce_wait_ms,
             "prefill_coalesce_when_idle": self.prefill_coalesce_when_idle,
@@ -261,8 +267,11 @@ class MossTranscribeDiarizeEngineBuilder(
             ),
             "request_build_max_workers": self.request_build_max_workers,
             "request_build_max_pending": self.request_build_max_pending,
-            # A build includes a blocking encoder pass of several milliseconds,
-            # so a short head-build wait never admits early and only stalls the
-            # scheduler thread.
-            "request_build_admission_wait_s": 0.0,
         }
+        if scheduler_kwargs["async_prefill"]:
+            # The full-graph scheduler need not stall for encoder builds. Keep
+            # the existing admission behavior on fallback attention backends.
+            scheduler_kwargs["request_build_admission_wait_s"] = 0.0
+        else:
+            pass
+        return scheduler_kwargs

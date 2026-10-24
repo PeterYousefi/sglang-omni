@@ -557,6 +557,53 @@ def test_partial_graph_override_preserves_prefill_capacity(
     assert overrides["cuda_graph_config"]["decode"] == graph_config["decode"]
 
 
+@pytest.mark.parametrize(
+    ("backend", "graphs_enabled", "is_cuda", "async_decode", "expected_async"),
+    [
+        ("full", True, True, True, True),
+        ("breakable", True, True, True, False),
+        ("disabled", True, True, True, False),
+        ("full", False, True, True, False),
+        ("full", True, False, True, False),
+        ("full", True, True, False, False),
+    ],
+)
+def test_prefill_scheduling_uses_resolved_graph_backend(
+    monkeypatch: pytest.MonkeyPatch,
+    backend: str,
+    graphs_enabled: bool,
+    is_cuda: bool,
+    async_decode: bool,
+    expected_async: bool,
+) -> None:
+    """An attention-backend fallback must preserve the existing scheduler policy."""
+    monkeypatch.setattr(engine_builder.current_platform, "is_cuda", lambda: is_cuda)
+    monkeypatch.setattr(engine_builder, "init_mm_embedding_cache", Mock())
+    monkeypatch.setattr(
+        engine_builder.request_builders,
+        "make_moss_transcribe_diarize_stream_output_builder",
+        Mock(),
+    )
+    builder = make_moss_engine_builder()
+    builder.enable_async_decode = async_decode
+    builder.processor = SimpleNamespace(
+        feature_extractor=SimpleNamespace(nb_max_frames=3000)
+    )
+    server_args = SimpleNamespace(
+        cuda_graph_config=SimpleNamespace(prefill=SimpleNamespace(backend=backend))
+    )
+    builder.setup_model_resources(
+        Mock(), server_args, generation_cuda_graph_enabled=graphs_enabled
+    )
+
+    scheduler_kwargs = builder.extra_scheduler_kwargs()
+    assert scheduler_kwargs["async_prefill"] is expected_async
+    if expected_async:
+        assert scheduler_kwargs["request_build_admission_wait_s"] == 0.0
+    else:
+        assert "request_build_admission_wait_s" not in scheduler_kwargs
+
+
 @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
 def test_packed_encoder_is_restricted_to_verified_dtype(
     monkeypatch: pytest.MonkeyPatch, dtype: torch.dtype
