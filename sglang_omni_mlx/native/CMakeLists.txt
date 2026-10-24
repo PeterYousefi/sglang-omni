@@ -254,6 +254,8 @@ install(FILES licenses/music3-MIT.txt DESTINATION licenses)
 # server's /v1/audio/speech API, and its parity tool; the Qwen2 decoder reuses
 # Qwen3's, and the WAV and PCM writers are Voxtral TTS's.
 add_library(cosyvoice3 STATIC src/cosyvoice3/cosyvoice3_vocoder.cpp
+  src/cosyvoice3/cosyvoice3_audio.cpp src/cosyvoice3/cosyvoice3_speaker.cpp
+  src/cosyvoice3/cosyvoice3_speech_tokenizer.cpp
   src/cosyvoice3/cosyvoice3_model.cpp)
 target_link_libraries(cosyvoice3 PUBLIC qwen3_asr voxtral_tts)
 target_compile_options(cosyvoice3 PRIVATE -Wall -Wextra -ffp-contract=off)

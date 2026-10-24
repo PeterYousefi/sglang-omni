@@ -8,6 +8,7 @@ returns is checked by transcribing it with qwen3_asr_server.
 
 from __future__ import annotations
 
+import base64
 import http.client
 import io
 import json
@@ -43,7 +44,11 @@ MAX_QUEUED_REQUESTS = 1
 # The deadline of deadline_server; cosyvoice3_server keeps the default, so its
 # requests stop only when cancelled.
 REQUEST_TIMEOUT_SECONDS = 8
-MAX_REQUEST_BODY_BYTES = 1024 * 1024
+MAX_REQUEST_BODY_BYTES = 32 * 1024 * 1024
+# A corpus clip and its transcript, the voice the cloning tests copy.
+REFERENCE_CLIP = "0000_en_short"
+REFERENCE_TEXT = "Socrates begins the Timaeus with a summary of the Republic."
+CLONED_SENTENCE = "The weather is lovely today, so let us take a walk in the park."
 # A cancelled synthesis stops within one speech token or one flow step.
 CANCEL_SECONDS = 4.0
 
@@ -52,13 +57,69 @@ def cosyvoice3_directory() -> Path:
     return Path(DATA_ROOT) / "models" / COSYVOICE3_REPO.replace("/", "_")
 
 
+def clips_directory() -> Path:
+    return Path(DATA_ROOT) / "corpus" / "v1" / "clips"
+
+
+def reference_samples() -> tuple[np.ndarray, int]:
+    with wave.open(str(clips_directory() / f"{REFERENCE_CLIP}.wav")) as reader:
+        rate = reader.getframerate()
+        pcm = reader.readframes(reader.getnframes())
+    return np.frombuffer(pcm, dtype="<i2").astype(np.float32) / 32768.0, rate
+
+
+def wav_bytes(
+    samples: np.ndarray, rate: int, sample_format: str = "pcm16", channels: int = 1
+) -> bytes:
+    """A WAV file of samples in one of the formats the server reads."""
+    frames = np.repeat(samples[:, None], channels, axis=1)
+    if sample_format == "float32":
+        data, format_code, bits = frames.astype("<f4").tobytes(), 3, 32
+    elif sample_format == "pcm24":
+        values = np.clip(frames * 8388608.0, -8388608, 8388607).astype("<i4")
+        data = values.view(np.uint8).reshape(-1, 4)[:, :3].tobytes()
+        format_code, bits = 1, 24
+    else:
+        values = np.clip(frames * 32768.0, -32768, 32767).astype("<i2")
+        data, format_code, bits = values.tobytes(), 1, 16
+    block = channels * bits // 8
+    header = (
+        b"RIFF"
+        + (36 + len(data)).to_bytes(4, "little")
+        + b"WAVEfmt "
+        + (16).to_bytes(4, "little")
+        + format_code.to_bytes(2, "little")
+        + channels.to_bytes(2, "little")
+        + rate.to_bytes(4, "little")
+        + (rate * block).to_bytes(4, "little")
+        + block.to_bytes(2, "little")
+        + bits.to_bytes(2, "little")
+        + b"data"
+        + len(data).to_bytes(4, "little")
+    )
+    return header + data
+
+
+def data_url(audio: bytes) -> str:
+    return "data:audio/wav;base64," + base64.b64encode(audio).decode()
+
+
+def reference_url() -> str:
+    return data_url((clips_directory() / f"{REFERENCE_CLIP}.wav").read_bytes())
+
+
 @pytest.fixture(scope="module")
 def cosyvoice3_server() -> Iterator[Server]:
     running = Server(
         "cosyvoice3_server",
         "cosyvoice3",
         cosyvoice3_directory(),
-        ("--max-queued-requests", str(MAX_QUEUED_REQUESTS)),
+        (
+            "--max-queued-requests",
+            str(MAX_QUEUED_REQUESTS),
+            "--allowed-local-media-path",
+            str(clips_directory()),
+        ),
     )
     yield running
     running.stop()
@@ -446,6 +507,146 @@ def test_cosyvoice3_rejects_another_model_than_its_chosen_name() -> None:
         named_server.stop()
 
 
+def test_cosyvoice3_clones_the_voice_of_ref_audio(
+    cosyvoice3_server: Server, asr_server: Server
+) -> None:
+    status, headers, pcm = speak(
+        cosyvoice3_server,
+        {
+            "input": CLONED_SENTENCE,
+            "ref_audio": reference_url(),
+            "ref_text": REFERENCE_TEXT,
+            "response_format": "pcm",
+            "seed": 1,
+        },
+    )
+    assert status == 200
+    # The reference's speech tokens join the prompt.
+    _, plain_headers, _ = speak(
+        cosyvoice3_server,
+        {"input": CLONED_SENTENCE, "response_format": "pcm", "max_new_tokens": 1},
+    )
+    assert int(headers["X-Prompt-Tokens"]) > int(plain_headers["X-Prompt-Tokens"]) + 100
+    heard = transcript_words(asr_server, pcm)
+    assert word_errors(words(CLONED_SENTENCE), heard) <= MAX_WORD_ERRORS, heard
+
+
+@pytest.mark.parametrize(
+    "reference",
+    [
+        # A references item, its audio inline.
+        lambda: {
+            "references": [
+                {
+                    "data": reference_url().split(",", 1)[1],
+                    "text": REFERENCE_TEXT,
+                }
+            ]
+        },
+        # A path inside --allowed-local-media-path, as a file URL.
+        lambda: {
+            "references": [
+                {
+                    "audio_path": f"file://{clips_directory() / REFERENCE_CLIP}.wav",
+                    "text": REFERENCE_TEXT,
+                }
+            ]
+        },
+        # Cross-lingual: no transcript, so the voice conditions only the flow.
+        lambda: {"ref_audio": reference_url()},
+    ],
+)
+def test_cosyvoice3_takes_every_reference_form(
+    cosyvoice3_server: Server, asr_server: Server, reference
+) -> None:
+    status, _, pcm = speak(
+        cosyvoice3_server,
+        {
+            "input": CLONED_SENTENCE,
+            "response_format": "pcm",
+            "seed": 2,
+            **reference(),
+        },
+    )
+    assert status == 200
+    heard = transcript_words(asr_server, pcm)
+    assert word_errors(words(CLONED_SENTENCE), heard) <= MAX_WORD_ERRORS, heard
+
+
+@pytest.mark.parametrize(
+    ("rate", "sample_format", "channels"),
+    [(48000, "float32", 2), (44100, "pcm24", 1), (8000, "pcm16", 1)],
+)
+def test_cosyvoice3_reads_reference_wav_formats(
+    cosyvoice3_server: Server, rate: int, sample_format: str, channels: int
+) -> None:
+    samples, clip_rate = reference_samples()
+    positions = np.arange(int(len(samples) * rate / clip_rate)) * clip_rate / rate
+    resampled = np.interp(positions, np.arange(len(samples)), samples)
+    status, _, _ = speak(
+        cosyvoice3_server,
+        {
+            "input": "hi",
+            "ref_audio": data_url(wav_bytes(resampled, rate, sample_format, channels)),
+            "response_format": "pcm",
+            "max_new_tokens": 1,
+        },
+    )
+    assert status == 200
+
+
+@pytest.mark.parametrize(
+    ("audio", "detail"),
+    [
+        (
+            lambda: wav_bytes(np.zeros(31 * 16000), 16000),
+            "reference audio must be between 0.5 and 30 seconds long",
+        ),
+        (
+            lambda: wav_bytes(np.zeros(1600), 16000),
+            "reference audio must be between 0.5 and 30 seconds long",
+        ),
+        # A rate whose exact resampling filter would take gigabytes.
+        (
+            lambda: wav_bytes(np.zeros(44099), 44099),
+            "reference WAV sample rate 44099 Hz is not supported",
+        ),
+        (lambda: wav_bytes(np.zeros(16000), 500), "reference WAV sample rate"),
+        (lambda: wav_bytes(np.zeros(16000), 16000)[:40], "reference WAV has no data"),
+        (
+            lambda: wav_bytes(np.full(16000, np.nan), 16000, "float32"),
+            "reference audio has non-finite samples",
+        ),
+    ],
+)
+def test_cosyvoice3_rejects_reference_audio_it_cannot_take(
+    cosyvoice3_server: Server, audio, detail: str
+) -> None:
+    status, response = cosyvoice3_server.request(
+        "POST",
+        "/v1/audio/speech",
+        json.dumps({"input": "hi", "ref_audio": data_url(audio())}).encode(),
+    )
+    assert status == 400
+    assert json.loads(response)["detail"].startswith(detail)
+
+
+def test_cosyvoice3_needs_an_allowed_directory_for_local_paths(
+    deadline_server: Server,
+) -> None:
+    status, response = deadline_server.request(
+        "POST",
+        "/v1/audio/speech",
+        json.dumps(
+            {"input": "hi", "ref_audio": str(clips_directory() / "x.wav")}
+        ).encode(),
+    )
+    assert status == 400
+    assert json.loads(response)["detail"].startswith(
+        "local reference audio paths need --allowed-local-media-path"
+    )
+
+
 @pytest.mark.parametrize(
     ("body", "detail"),
     [
@@ -492,15 +693,52 @@ def test_cosyvoice3_rejects_another_model_than_its_chosen_name() -> None:
         ),
         ({"input": "hi", "references": {}}, "references must be a list"),
         ({"input": "hi", "stage_params": []}, "stage_params must be an object"),
+        ({"input": "hi", "ref_audio": 5}, "ref_audio must be a string"),
+        ({"input": "hi", "ref_text": 5}, "ref_text must be a string"),
         (
-            {"input": "hi", "ref_audio": "a.wav", "ref_text": "hello"},
-            "Fun-CosyVoice3 on this server does not support these /v1/audio/speech "
-            "fields: ref_audio, ref_text. Reference audio is not served yet",
+            {"input": "hi", "ref_audio": "data:audio/wav;base64,@@@"},
+            "reference audio is not valid base64",
         ),
         (
-            {"input": "hi", "references": [{"audio_path": "a.wav"}]},
-            "Fun-CosyVoice3 on this server does not support these /v1/audio/speech "
-            "fields: references.",
+            {"input": "hi", "ref_audio": "data:audio/wav,abc"},
+            "a reference audio data URL must be base64",
+        ),
+        (
+            {"input": "hi", "ref_audio": "data:audio/wav;base64,aGVsbG8="},
+            "reference audio must be a RIFF/WAVE file",
+        ),
+        (
+            {"input": "hi", "ref_audio": "https://example.com/a.wav"},
+            "reference audio URLs are not supported",
+        ),
+        (
+            {"input": "hi", "ref_audio": "/etc/passwd"},
+            "reference audio path is outside --allowed-local-media-path",
+        ),
+        (
+            {"input": "hi", "ref_audio": "a.wav", "references": [{"audio": "b.wav"}]},
+            "give references or ref_audio, not both",
+        ),
+        (
+            {"input": "hi", "references": [{"audio": "a.wav"}, {"audio": "b.wav"}]},
+            "Fun-CosyVoice3 accepts exactly one reference",
+        ),
+        ({"input": "hi", "references": [5]}, "Fun-CosyVoice3 references must be"),
+        ({"input": "hi", "references": [{"text": "hi"}]}, "references[0] has no"),
+        (
+            {
+                "input": "hi",
+                "references": [{"data": "aGk=", "media_type": "audio/mp3"}],
+            },
+            "reference audio must be a WAV file",
+        ),
+        (
+            {"input": "hi", "references": [{"audio": "a.wav", "vq_codes": [1]}]},
+            "Fun-CosyVoice3 does not take vq_codes",
+        ),
+        (
+            {"input": "hi", "ref_text": "hello", "instructions": "Speak slowly."},
+            "Fun-CosyVoice3 accepts either ref_text or instructions, not both",
         ),
     ],
 )

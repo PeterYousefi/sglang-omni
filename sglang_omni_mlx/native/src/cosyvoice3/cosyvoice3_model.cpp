@@ -321,8 +321,7 @@ constexpr const char *kSpecialTokens[] = {
 };
 
 // Note (lgyStoic): the Qwen2 decoder's checkpoint mapping and checks; the
-// flow and HiFT weights keep their stored names, and the speaker encoder's
-// are left out, since reference audio is not served.
+// flow, HiFT and speaker encoder weights keep their stored names.
 qwen3_asr::Checkpoint
 LoadCheckpoint(const std::filesystem::path &model_directory) {
   auto config = qwen3_asr::ReadJson(model_directory / "config.json");
@@ -375,7 +374,7 @@ LoadCheckpoint(const std::filesystem::path &model_directory) {
       mapped_name = "llm_decoder.weight";
     } else if ((name.starts_with("flow.") &&
                 !name.ends_with("rotary_embed.inv_freq")) ||
-               name.starts_with("hifigan.")) {
+               name.starts_with("hifigan.") || name.starts_with("campplus.")) {
       mapped_name = name;
     } else {
       continue;
@@ -454,11 +453,22 @@ mx::array TokenIds(const std::vector<int> &token_ids, int vocabulary_size) {
                    mx::int32);
 }
 
-std::filesystem::path
-TokenizerDirectory(const std::filesystem::path &model_directory) {
-  const std::filesystem::path nested = model_directory / "CosyVoice-BlankEN";
-  return std::filesystem::exists(nested / "vocab.json") ? nested
-                                                        : model_directory;
+// The S3 speech tokenizer v3 checkpoint the model directory holds in
+// speech_tokenizer/.
+qwen3_asr::Checkpoint
+LoadSpeechTokenizer(const std::filesystem::path &directory) {
+  const nlohmann::json config = qwen3_asr::ReadJson(directory / "config.json");
+  if (config.value("model_type", std::string()) != "s3_tokenizer_v3" ||
+      config.value("n_audio_layer", 0) != 12 ||
+      config.value("n_audio_state", 0) != 1280 ||
+      config.value("n_mels", 0) != 128 ||
+      config.value("n_codebook_size", 0) != kSpeechTokenSize) {
+    throw std::invalid_argument(
+        "speech_tokenizer/ must hold the S3 speech tokenizer v3");
+  } else {
+  }
+  return qwen3_asr::Checkpoint(qwen3_asr::LoadSafetensors(directory),
+                               nlohmann::json::object());
 }
 
 } // namespace
@@ -468,9 +478,11 @@ CosyVoice3Model::CosyVoice3Model(const std::filesystem::path &model_directory)
       decoder_(checkpoint_, "model",
                {kLayerCount, kAttentionHeadCount, kKeyValueHeadCount,
                 kHeadDimension, kRmsNormEpsilon, kRopeTheta, false, false}),
-      tokenizer_(std::make_unique<qwen3_asr::Tokenizer>(
-          TokenizerDirectory(model_directory))),
-      flow_(checkpoint_), hift_(checkpoint_) {}
+      tokenizer_(std::make_unique<qwen3_asr::Tokenizer>(model_directory)),
+      flow_(checkpoint_), hift_(checkpoint_), speaker_encoder_(checkpoint_),
+      speech_tokenizer_checkpoint_(
+          LoadSpeechTokenizer(model_directory / "speech_tokenizer")),
+      speech_tokenizer_(speech_tokenizer_checkpoint_) {}
 
 std::vector<int> CosyVoice3Model::Encode(const std::string &text) const {
   // Note (Jiaxin Deng): as Hugging Face splits added tokens out first,
@@ -509,14 +521,46 @@ std::vector<int> CosyVoice3Model::Encode(const std::string &text) const {
 
 std::pair<std::vector<int>, std::vector<int>>
 CosyVoice3Model::EncodeText(const SpeechText &text) const {
+  // Note (Jiaxin Deng): the CUDA server's prompt text: instructions, else
+  // the reference transcript, each kept as given when it already ends its
+  // prompt.
   std::string prompt = kPromptPrefix;
   if (text.instructions.has_value()) {
     prompt = text.instructions->find(kEndOfPrompt) != std::string::npos
                  ? *text.instructions
                  : kInstructPrefix + *text.instructions + kEndOfPrompt;
+  } else if (text.reference_text.has_value()) {
+    prompt = text.reference_text->find(kEndOfPrompt) != std::string::npos
+                 ? *text.reference_text
+                 : kPromptPrefix + *text.reference_text;
   } else {
   }
   return {Encode(prompt), Encode(text.text)};
+}
+
+Reference CosyVoice3Model::EncodeReference(const ReferenceAudio &audio) const {
+  const mx::array tokens = speech_tokenizer_.Encode(audio.samples_16k);
+  mx::eval(tokens);
+  const int32_t *token_values = tokens.data<int32_t>();
+  std::vector<int> speech_tokens(token_values, token_values + tokens.size());
+  const mx::array mel = PromptMel(audio.samples_24k);
+  // Note (Jiaxin Deng): the flow takes two mel frames per prompt token, so
+  // the longer of the two is trimmed, as on CUDA.
+  const int flow_token_count = std::min(static_cast<int>(speech_tokens.size()),
+                                        mel.shape(1) / kMelFramesPerToken);
+  if (flow_token_count == 0) {
+    throw std::invalid_argument("reference audio gives no speech tokens");
+  } else {
+  }
+  Reference reference{
+      speech_tokens,
+      std::vector<int>(speech_tokens.begin(),
+                       speech_tokens.begin() + flow_token_count),
+      mx::slice(mel, {0, 0, 0},
+                {1, kMelFramesPerToken * flow_token_count, kMelBinCount}),
+      speaker_encoder_.Embed(audio.samples_16k)};
+  mx::eval({reference.prompt_mel, reference.speaker_embedding});
+  return reference;
 }
 
 mx::array CosyVoice3Model::BuildPromptEmbeddings(
@@ -581,6 +625,7 @@ std::vector<qwen3_asr::KVCache> CosyVoice3Model::NewCaches() const {
 GeneratedSpeech
 CosyVoice3Model::Generate(const std::vector<int> &prompt_text_ids,
                           const std::vector<int> &target_text_ids,
+                          const std::vector<int> &prompt_speech_tokens,
                           const SamplingOptions &options,
                           const std::atomic<bool> &cancel,
                           const std::function<void(int)> &on_token) const {
@@ -601,8 +646,8 @@ CosyVoice3Model::Generate(const std::vector<int> &prompt_text_ids,
   text_ids.insert(text_ids.end(), target_text_ids.begin(),
                   target_text_ids.end());
   std::vector<qwen3_asr::KVCache> caches = NewCaches();
-  mx::array logits =
-      ForwardEmbeddings(BuildPromptEmbeddings(text_ids, {}), caches);
+  mx::array logits = ForwardEmbeddings(
+      BuildPromptEmbeddings(text_ids, prompt_speech_tokens), caches);
   const mx::array vocabulary =
       mx::arange(kTotalSpeechVocabularySize, mx::int32);
   const mx::array is_control =
@@ -692,10 +737,17 @@ CosyVoice3Model::Generate(const std::vector<int> &prompt_text_ids,
 }
 
 mx::array CosyVoice3Model::Mel(const std::vector<int> &speech_tokens,
+                               const std::optional<Reference> &reference,
                                const std::function<void()> &on_step) const {
-  return flow_.Decode(
-      speech_tokens, {}, mx::zeros({1, 0, kMelBinCount}, mx::float16),
-      mx::zeros({1, kSpeakerEmbeddingSize}, mx::float32), on_step);
+  if (reference.has_value()) {
+    return flow_.Decode(speech_tokens, reference->flow_tokens,
+                        reference->prompt_mel, reference->speaker_embedding,
+                        on_step);
+  } else {
+    return flow_.Decode(
+        speech_tokens, {}, mx::zeros({1, 0, kMelBinCount}, mx::float16),
+        mx::zeros({1, kSpeakerEmbeddingSize}, mx::float32), on_step);
+  }
 }
 
 mx::array CosyVoice3Model::Samples(const mx::array &mel) const {
@@ -705,8 +757,17 @@ mx::array CosyVoice3Model::Samples(const mx::array &mel) const {
 }
 
 mx::array CosyVoice3Model::Vocode(const std::vector<int> &speech_tokens,
+                                  const std::optional<Reference> &reference,
                                   const std::function<void()> &on_step) const {
-  return Samples(Mel(speech_tokens, on_step));
+  return Samples(Mel(speech_tokens, reference, on_step));
+}
+
+ReferenceAudio ReadReferenceAudio(std::string_view wav_bytes) {
+  const DecodedAudio decoded = DecodeWav(wav_bytes);
+  // Note (Jiaxin Deng): each encoder's rate is resampled from the file's, as
+  // the CUDA server loads the reference once per rate.
+  return {Resample(decoded.samples, decoded.sample_rate, 16000),
+          Resample(decoded.samples, decoded.sample_rate, kSampleRate)};
 }
 
 std::vector<int> TrimSilentRuns(const std::vector<int> &speech_tokens) {

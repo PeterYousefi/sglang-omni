@@ -15,6 +15,9 @@
 
 #include "common/layers.h"
 #include "common/tokenizer.h"
+#include "cosyvoice3/cosyvoice3_audio.h"
+#include "cosyvoice3/cosyvoice3_speaker.h"
+#include "cosyvoice3/cosyvoice3_speech_tokenizer.h"
 #include "cosyvoice3/cosyvoice3_vocoder.h"
 #include "mlx/mlx.h"
 #include "qwen3_asr/qwen3_asr_transcriber.h"
@@ -44,10 +47,29 @@ struct SamplingOptions {
   std::optional<int> max_new_tokens;
 };
 
-// One request's text: the target, and the instruction that styles it.
+// One request's text: the target, and the instruction that styles it or the
+// reference audio's transcript (not both).
 struct SpeechText {
   std::string text;
   std::optional<std::string> instructions;
+  std::optional<std::string> reference_text;
+};
+
+// A reference recording at the rates its two encoders take.
+struct ReferenceAudio {
+  std::vector<float> samples_16k;
+  std::vector<float> samples_24k;
+};
+
+// What a reference recording conditions: its speech tokens (the LLM's speech
+// prompt when its transcript is given), and the flow's prompt, its tokens
+// trimmed to half its mel frames, mel [1, 2 * flow tokens, 80] and speaker
+// embedding [1, 192].
+struct Reference {
+  std::vector<int> speech_tokens;
+  std::vector<int> flow_tokens;
+  mlx::core::array prompt_mel;
+  mlx::core::array speaker_embedding;
 };
 
 struct GeneratedSpeech {
@@ -66,20 +88,29 @@ public:
   std::pair<std::vector<int>, std::vector<int>>
   EncodeText(const SpeechText &text) const;
 
-  // Samples speech tokens after the text ids; calls on_token with each one
-  // and throws TranscriptionCancelled once cancel is set.
+  // Encodes a reference recording; throws std::invalid_argument for audio
+  // too short to give a speech token.
+  Reference EncodeReference(const ReferenceAudio &audio) const;
+
+  // Samples speech tokens after the text ids and the prompt speech tokens;
+  // calls on_token with each one and throws TranscriptionCancelled once
+  // cancel is set.
   GeneratedSpeech Generate(const std::vector<int> &prompt_text_ids,
                            const std::vector<int> &target_text_ids,
+                           const std::vector<int> &prompt_speech_tokens,
                            const SamplingOptions &options,
                            const std::atomic<bool> &cancel,
                            const std::function<void(int)> &on_token) const;
 
-  // Float32 samples of speech tokens, with no reference speaker; calls
-  // on_step before each flow step, which may throw to stop it.
+  // Float32 samples of speech tokens in the reference's voice, or with no
+  // speaker without one; calls on_step before each flow step, which may
+  // throw to stop it.
   mlx::core::array Vocode(const std::vector<int> &speech_tokens,
+                          const std::optional<Reference> &reference,
                           const std::function<void()> &on_step) const;
   // Vocode's two halves: the flow's mel [1, 80, frames], and its samples.
   mlx::core::array Mel(const std::vector<int> &speech_tokens,
+                       const std::optional<Reference> &reference,
                        const std::function<void()> &on_step) const;
   mlx::core::array Samples(const mlx::core::array &mel) const;
 
@@ -106,7 +137,14 @@ private:
   std::unique_ptr<qwen3_asr::Tokenizer> tokenizer_;
   Flow flow_;
   Hift hift_;
+  SpeakerEncoder speaker_encoder_;
+  qwen3_asr::Checkpoint speech_tokenizer_checkpoint_;
+  SpeechTokenizer speech_tokenizer_;
 };
+
+// The reference recording in WAV bytes at both encoders' rates; throws
+// std::invalid_argument for audio it cannot take.
+ReferenceAudio ReadReferenceAudio(std::string_view wav_bytes);
 
 // Speech tokens with every run of more than five silent tokens cut to five.
 std::vector<int> TrimSilentRuns(const std::vector<int> &speech_tokens);

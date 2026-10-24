@@ -295,9 +295,7 @@ def run(transcribe_corpus: TranscribeCorpus) -> None:
         metrics = {}
     elif golden.get("kind") == "cosyvoice3":
         results = cosyvoice3_golden.synthesize_cases(
-            arguments.runtime_bin,
-            model_directory(arguments.data_root, golden["model"]),
-            golden["cases"],
+            arguments.runtime_bin, arguments.data_root, golden
         )
         metrics = {}
     else:

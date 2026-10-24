@@ -133,15 +133,17 @@
     "revision": "18ccb7fbd7246e8cd3420d02f5dd28595cc0fcd9",
     "files": {
       "config.json": "9cc01133150556729617139abb8da29515badce819930e35c7da11a88b595a03",
-      "model.safetensors": "d7dc16402d2086e8b0996fe52462d9616e3eecd64f7cdb62f5c1acc898701374"
+      "model.safetensors": "d7dc16402d2086e8b0996fe52462d9616e3eecd64f7cdb62f5c1acc898701374",
+      "tokenizer.json": "5e3855f008ece7e02f09bad5c0aa492cd1594529a796b80193f4ef640200e58b",
+      "tokenizer_config.json": "46a369aa40642d4be780e4842ea299e08764ff8edc64c2ad7738e04d94a51637"
     },
     "tokenizer": {
-      "repo": "FunAudioLLM/Fun-CosyVoice3-0.5B-2512",
-      "revision": "29e01c4e8d000f4bcd70751be16fa94bf3d85a18",
+      "repo": "mlx-community/S3TokenizerV3",
+      "revision": "b143914b3e912278104824da706edc9c2d317c4e",
+      "subdirectory": "speech_tokenizer",
       "files": {
-        "CosyVoice-BlankEN/merges.txt": "ac8ff86a72bee70828fbc1119bc4398c6f3a9a6e490d7b0dbe917be025478bd0",
-        "CosyVoice-BlankEN/tokenizer_config.json": "482bd979881423375ca5414e4e0d94cd7c5349dbb17fffd46b4d36d71e62a1bc",
-        "CosyVoice-BlankEN/vocab.json": "ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910"
+        "config.json": "355c1cc1337107c89c786d7c2675d7a30322b204456f1a273acc037e291111cc",
+        "model.safetensors": "ee05a65d4472f089d55b5dfcd9e19f42e3245f4f19d612b90c04cb051a80105e"
       }
     }
   },
