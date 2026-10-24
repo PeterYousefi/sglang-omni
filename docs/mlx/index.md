@@ -12,6 +12,10 @@ Rules for Apple Silicon work. They write down what the native runtime PRs under
 | `sglang_omni_mlx/<model>/` | Python MLX servers, e.g. the Qwen3-ASR reference server. |
 | `Voxt/` | The macOS app that runs the native servers. See [`Voxt/backend/README.md`](https://github.com/sgl-project/sglang-omni/blob/main/Voxt/backend/README.md). |
 
+## Proposals
+
+- [Qwen3-TTS native C++ migration RFC](../design/qwen3_tts_native_cpp_rfc.md)
+
 ## Rule 1: MLX is a separate path
 
 MLX code is not abstracted together with the CUDA path in `sglang_omni`.
