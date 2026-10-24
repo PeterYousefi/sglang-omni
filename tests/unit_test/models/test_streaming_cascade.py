@@ -1602,7 +1602,7 @@ def test_profiles_speak_the_user_language(profile):
     ("flags", "admitted"), [([], 16), (["--max_sessions", "24"], 24)]
 )
 def test_node_stages_admit_max_sessions_and_refuse_the_next(flags, admitted):
-    manager = ConfigManager(profile_config("qwen3-asr-qwen3.8-27b-customvoice"))
+    manager = ConfigManager(profile_config("qwen3-asr-qwen3.8-27b-vivian"))
     config = manager.merge_config(manager.parse_extra_args(flags))
     stages = {}
     for name in ("vad", "dialog"):
