@@ -715,7 +715,13 @@ private:
                                  codes.data<int32_t>() + codes.size());
           }
         });
-    if (request.stream) {
+    // Note (Jiaxin Deng): the last decode can take seconds, so a request
+    // already cancelled or past its deadline skips it.
+    if (cancel.load()) {
+      throw qwen3_asr::TranscriptionCancelled();
+    } else if (std::chrono::steady_clock::now() >= deadline) {
+      throw DeadlineReached();
+    } else if (request.stream) {
       send(stream.Finish());
     } else {
       // Note (Jiaxin Deng): a whole response decodes every frame at once, as
