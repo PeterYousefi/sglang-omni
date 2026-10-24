@@ -138,7 +138,7 @@ Json FieldOr(const Json &body, const char *name, Json fallback) {
 }
 
 // body's field, null included, or fallback when it is missing.
-// Note (Jiaxin Deng): CUDA's CreateSpeechRequest takes null as the default
+// Note (Minyi Tang): CUDA's CreateSpeechRequest takes null as the default
 // only for the fields it types as optional, and rejects it for the rest.
 Json PresentFieldOr(const Json &body, const char *name, Json fallback) {
   const auto found = body.find(name);
@@ -317,9 +317,10 @@ SpeechRequest ParseRequest(const Json &body,
     request.model = model_name.get<std::string>();
   } else {
   }
-  // Note (Jiaxin Deng): as CUDA's AliasChoices("voice", "speaker"), voice wins
-  // whenever it is given, even as null. MOSS has no preset voices, and CUDA
-  // passes over a name it has no uploaded voice for; this server keeps none.
+  // Note (Minyi Tang): as CUDA's AliasChoices("voice", "speaker"), voice wins
+  // whenever it is given, even as null.
+  // Note (Jiaxin Deng): MOSS has no preset voices, and CUDA passes over a name
+  // it has no uploaded voice for; this server keeps none.
   if (!PresentFieldOr(body, "voice",
                       PresentFieldOr(body, "speaker", Json("default")))
            .is_string()) {
@@ -332,7 +333,7 @@ SpeechRequest ParseRequest(const Json &body,
     throw std::invalid_argument("response_format must be a string");
   } else {
   }
-  // Note (Jiaxin Deng): as CUDA's response_format.strip().lower().
+  // Note (Minyi Tang): as CUDA's response_format.strip().lower().
   request.response_format = AsciiLower(
       qwen3_asr::StripUnicodeWhitespace(response_format.get<std::string>()));
   if (request.response_format != "pcm" && request.response_format != "wav") {
@@ -522,7 +523,7 @@ std::string NewRequestId() {
 // address and port since civetweb does not expose it, or -1.
 int ClientSocket(const mg_connection *connection) {
   const mg_request_info *request_info = mg_get_request_info(connection);
-  // Note (Jiaxin Deng): a listing that fails, as it does in a process out of
+  // Note (Minyi Tang): a listing that fails, as it does in a process out of
   // descriptors, ends the search, and the request is then served without
   // watching its client. Nothing here throws, since an exception would unwind
   // through civetweb's C callback and terminate the server.
@@ -566,11 +567,12 @@ int ClientSocket(const mg_connection *connection) {
 
 // Whether the client of client_socket closed it, which its socket shows by
 // reading as ended or failing.
-// Note (Jiaxin Deng): civetweb keeps no connection alive, so it never serves
+// Note (Minyi Tang): civetweb keeps no connection alive, so it never serves
 // what a client sends after its request; that is read and dropped here, since
 // bytes left unread would hide the end of the socket from every later check.
-// A client that only shuts down its sending side also reads as ended and is
-// treated as gone, as uvicorn treats it for the CUDA server.
+// Note (Minyi Tang): a client that only shuts down its sending side also reads
+// as ended and is treated as gone, as uvicorn treats it for the CUDA server.
+// TCP tells the two apart only once something is written to the socket.
 bool ClientLeft(int client_socket) {
   if (client_socket < 0) {
     return false;
@@ -616,7 +618,7 @@ void LogFailure(std::exception_ptr error) {
     std::rethrow_exception(error);
   } catch (const qwen3_asr::TranscriptionCancelled &) {
   } catch (const std::exception &failure) {
-    // Note (Jiaxin Deng): only the exception type is logged, never the text.
+    // Note (Minyi Tang): only the exception type is logged, never the text.
     std::cerr << "speech generation failed: " << typeid(failure).name() << "\n";
   }
 }
@@ -640,7 +642,7 @@ public:
     throw std::logic_error("moss_tts_local serves no transcriptions");
   }
   bool Transcribes() const override { return false; }
-  // Note (Jiaxin Deng): /health counts the slots admission holds, which the
+  // Note (Minyi Tang): /health counts the slots admission holds, which the
   // worker frees only after it marks a request done; once /health shows the
   // server idle, it admits a full queue.
   std::map<std::string, int>
@@ -704,7 +706,7 @@ private:
     } catch (const std::invalid_argument &error) {
       return omni_server::BadRequest(connection, error.what());
     }
-    // Note (Jiaxin Deng): no client can know a generated name, and the CUDA
+    // Note (Minyi Tang): no client can know a generated name, and the CUDA
     // speech API ignores model, so only a chosen name is enforced.
     if (has_chosen_model_name() && request.model.has_value() &&
         *request.model != model_name()) {
@@ -736,7 +738,7 @@ private:
         cancel,
         [this, channel](std::optional<TranscriptionResult> result,
                         std::exception_ptr error) {
-          // Note (Jiaxin Deng): the slot frees before the response can end,
+          // Note (Minyi Tang): the slot frees before the response can end,
           // so a client's next request is never refused for its previous one.
           {
             std::lock_guard<std::mutex> lock(admission_mutex_);
@@ -769,12 +771,12 @@ private:
       if (has_audio_or_end && channel->chunks.empty()) {
         break;
       } else if (std::chrono::steady_clock::now() >= deadline) {
-        // Note (Jiaxin Deng): a write that blocked past the deadline leaves
+        // Note (Minyi Tang): a write that blocked past the deadline leaves
         // audio waiting, which wait_until hands back without waiting.
         timed_out = true;
         break;
       } else if (!has_audio_or_end) {
-        // Note (Jiaxin Deng): the client is watched while its request waits
+        // Note (Minyi Tang): the client is watched while its request waits
         // in the queue too, and a request cancelled there never starts.
         client_left = ClientLeft(client_socket);
         if (client_left) {
@@ -800,7 +802,7 @@ private:
         }
         const std::string pcm =
             moss_tts_local::Pcm16Bytes(Shape(chunk, request));
-        // Note (Jiaxin Deng): a write fails once the peer is gone, which
+        // Note (Minyi Tang): a write fails once the peer is gone, which
         // cancels the generation that feeds it.
         if (mg_write(connection, pcm.data(), pcm.size()) <= 0) {
           cancel->store(true);
@@ -813,13 +815,13 @@ private:
     }
     lock.unlock();
     if (client_left) {
-      // Note (Jiaxin Deng): nothing is read from the channel, which the
+      // Note (Minyi Tang): nothing is read from the channel, which the
       // generation may still be writing.
       cancel->store(true);
       return kClientLeftStatus;
     } else {
     }
-    // Note (Jiaxin Deng): the generation stops at the deadline itself, and may
+    // Note (Minyi Tang): the generation stops at the deadline itself, and may
     // report that before this thread's wait reaches the deadline. Any other
     // error is a failure, even one that arrives after the deadline.
     if (!timed_out && ReachedDeadline(channel->error)) {
@@ -827,7 +829,7 @@ private:
     } else {
     }
     if (timed_out) {
-      // Note (Jiaxin Deng): a request still queued is dropped once the worker
+      // Note (Minyi Tang): a request still queued is dropped once the worker
       // reaches it.
       cancel->store(true);
       std::cerr << "speech generation timed out\n";
@@ -908,7 +910,7 @@ private:
     result.finish_reason =
         model_.Generate(request.prompt_rows, request.generation, cancel,
                         [&](const mlx::core::array &codes) {
-                          // Note (Jiaxin Deng): the generation checks its own
+                          // Note (Minyi Tang): the generation checks its own
                           // deadline, since the request's thread may be blocked
                           // writing to a slow client.
                           if (std::chrono::steady_clock::now() >= deadline) {
