@@ -70,8 +70,9 @@ constexpr size_t kMaxInputCharacters = 4096;
 constexpr size_t kMaxRequestBodyBytes = 16 * 1024 * 1024;
 constexpr size_t kMaxReferenceFileBytes = 12 * 1024 * 1024;
 constexpr int kDefaultMaxSpeechTokens = 1000;
-// T3's speech positions.
-constexpr int kMaxSpeechTokens = 4096;
+// Note (Jiaxin Deng): the flow's attention over prompt and speech mel frames
+// grows with their square; 1024 tokens fit in a few GB, 4096 need over 25.
+constexpr int kMaxSpeechTokens = 1024;
 constexpr double kMaxRepetitionPenalty = 2.0;
 constexpr int kRequestIdHexDigits = 32;
 constexpr int kMaxRequestTimeoutSeconds = 24 * 60 * 60;
@@ -94,8 +95,9 @@ constexpr std::array<const char *, 9> kUnsupportedFields = {
 struct SpeechRequest {
   std::vector<int> text_ids;
   std::optional<std::string> model;
-  // The reference recording's 24 kHz samples; none for the built-in voice.
-  std::optional<std::vector<float>> reference;
+  // The reference recording's WAV bytes, its header checked; none for the
+  // built-in voice.
+  std::optional<std::string> reference;
   std::string response_format;
   chatterbox::SamplingOptions sampling;
   int max_speech_tokens = kDefaultMaxSpeechTokens;
@@ -473,11 +475,11 @@ ParseRequest(const Json &body, const chatterbox::ChatterboxModel &model,
     request.seed = seed.get<uint64_t>();
   }
 
-  const std::optional<std::string> reference_bytes =
-      RequestReference(body, allowed_directory);
-  if (reference_bytes.has_value()) {
-    request.reference =
-        chatterbox::ChatterboxModel::ReadReference(*reference_bytes);
+  // Note (Jiaxin Deng): only the header is read here; decoding and
+  // resampling run in the admitted job, under its deadline.
+  request.reference = RequestReference(body, allowed_directory);
+  if (request.reference.has_value()) {
+    chatterbox::ChatterboxModel::CheckReference(*request.reference);
   } else {
   }
   request.text_ids = model.EncodeText(text);
@@ -785,6 +787,7 @@ private:
     const chatterbox::Voice voice = request.reference.has_value()
                                         ? model_.CloneVoice(*request.reference)
                                         : model_.builtin_voice();
+    check_deadline();
     mlx::core::random::seed(request.seed);
     std::vector<int> speech_tokens;
     TranscriptionResult result;

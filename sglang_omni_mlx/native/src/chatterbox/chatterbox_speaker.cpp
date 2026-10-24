@@ -14,7 +14,6 @@ namespace mx = mlx::core;
 
 namespace {
 
-constexpr const char *kWeightPrefix = "s3gen.speaker_encoder.";
 constexpr int kFbankSampleRate = 16000;
 constexpr int kFbankFrameSamples = 400;
 constexpr int kFbankShiftSamples = 160;
@@ -165,9 +164,10 @@ mx::array SegmentMeans(const mx::array &x) {
 
 } // namespace
 
-SpeakerEncoder::SpeakerEncoder(const qwen3_asr::Checkpoint &checkpoint) {
+SpeakerEncoder::SpeakerEncoder(const qwen3_asr::Checkpoint &checkpoint,
+                               const std::string &weight_prefix) {
   const auto copy_weight = [&](const std::string &name) {
-    mx::array weight = checkpoint.Weight(kWeightPrefix + name);
+    mx::array weight = checkpoint.Weight(weight_prefix + name);
     // Square 2-D kernels are stored [out, in, height, width]; MLX convolves
     // with [out, height, width, in].
     if (weight.ndim() == 4) {

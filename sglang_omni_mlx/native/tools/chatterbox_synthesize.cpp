@@ -3,10 +3,12 @@
 // JSON line of timings and peak memory; with --tokens-output, also the text
 // ids, the cloned voice's prompt speech tokens and the generated speech
 // tokens, and with --samples-output the float32 samples, for parity checks
-// against the reference.
+// against the reference. --speech-tokens skips T3 and voices the given
+// space-separated speech tokens.
 //
 //   chatterbox_synthesize --model-path DIR --text TEXT
 //       [--reference-audio WAV] [--seed N] [--max-new-tokens N]
+//       [--speech-tokens "T1 T2 ..."]
 //       [--temperature T] [--top-k K] [--top-p P] [--repetition-penalty R]
 //       [--output out.wav] [--tokens-output tokens.json]
 //       [--samples-output samples.f32]
@@ -53,6 +55,7 @@ int main(int argc, char **argv) {
   std::string output_path;
   std::string tokens_output_path;
   std::string samples_output_path;
+  std::optional<std::vector<int>> given_speech_tokens;
   for (int i = 1; i < argc; ++i) {
     const std::string argument = argv[i];
     if (i + 1 >= argc) {
@@ -85,6 +88,10 @@ int main(int argc, char **argv) {
       tokens_output_path = value;
     } else if (argument == "--samples-output") {
       samples_output_path = value;
+    } else if (argument == "--speech-tokens") {
+      std::istringstream tokens(value);
+      given_speech_tokens.emplace(std::istream_iterator<int>(tokens),
+                                  std::istream_iterator<int>());
     } else {
       std::cerr << argv[0] << ": unknown option " << argument << "\n";
       return 2;
@@ -107,8 +114,8 @@ int main(int argc, char **argv) {
     std::ifstream stream(reference_path, std::ios::binary);
     const std::string wav_bytes((std::istreambuf_iterator<char>(stream)),
                                 std::istreambuf_iterator<char>());
-    voice =
-        model.CloneVoice(chatterbox::ChatterboxModel::ReadReference(wav_bytes));
+    chatterbox::ChatterboxModel::CheckReference(wav_bytes);
+    voice = model.CloneVoice(wav_bytes);
   } else {
   }
   const double conditioning_seconds = SecondsSince(started);
@@ -116,9 +123,14 @@ int main(int argc, char **argv) {
   const auto tokens_started = std::chrono::steady_clock::now();
   std::vector<int> speech_tokens;
   const std::atomic<bool> cancel(false);
-  const qwen3_asr::FinishReason finish_reason = model.GenerateSpeechTokens(
-      voice, text_ids, sampling, max_speech_tokens, cancel,
-      [&](int token) { speech_tokens.push_back(token); });
+  qwen3_asr::FinishReason finish_reason = qwen3_asr::FinishReason::kStop;
+  if (given_speech_tokens.has_value()) {
+    speech_tokens = *given_speech_tokens;
+  } else {
+    finish_reason = model.GenerateSpeechTokens(
+        voice, text_ids, sampling, max_speech_tokens, cancel,
+        [&](int token) { speech_tokens.push_back(token); });
+  }
   const double t3_seconds = SecondsSince(tokens_started);
   const auto audio_started = std::chrono::steady_clock::now();
   const std::vector<float> samples = model.Synthesize(speech_tokens, voice);

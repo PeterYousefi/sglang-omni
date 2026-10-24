@@ -18,13 +18,15 @@ namespace {
 constexpr uint16_t kWavFormatPcm = 1;
 constexpr uint16_t kWavFormatFloat = 3;
 constexpr uint16_t kWavFormatExtensible = 0xFFFE;
-// The most channels the decoder mixes down.
-constexpr int kMaximumChannelCount = 254;
+// Mono or stereo: the decoder's mix of more channels wraps negative sums.
+constexpr int kMaximumChannelCount = 2;
 // Note (Jiaxin Deng): bounds that keep a hostile header from asking for a
 // multi-gigabyte resampling filter or output; every common rate is inside.
 constexpr uint32_t kMinimumFileSampleRate = 1000;
 constexpr uint32_t kMaximumFileSampleRate = 384000;
-constexpr long kMaximumResampleFactor = 1 << 16;
+// Note (Jiaxin Deng): 11025 Hz to 24 kHz, the largest reduced ratio of the
+// common rates, is 320.
+constexpr long kMaximumResampleFactor = 1024;
 constexpr float kPcm16FullScale = 32768.0f;
 
 // A Kaiser-windowed sinc with the kaiser_best parameters: 64 zero crossings.
@@ -506,8 +508,20 @@ std::vector<float> Resample(const std::vector<float> &samples, int from_rate,
   return output;
 }
 
-std::vector<float> ReadAudio(std::string_view file_bytes, int sample_rate,
-                             double max_seconds) {
+namespace {
+
+struct WavLayout {
+  uint16_t format;
+  int channel_count;
+  uint32_t sample_rate;
+  int bits_per_sample;
+  std::string_view data;
+  size_t frame_count;
+};
+
+// The layout of a WAV file ReadAudio can decode at sample_rate; throws
+// std::invalid_argument for one it cannot.
+WavLayout ParseWav(std::string_view file_bytes, int sample_rate) {
   if (sample_rate <= 0) {
     throw std::invalid_argument("sample rate must be positive");
   } else if (file_bytes.size() < 12 || file_bytes.substr(0, 4) != "RIFF" ||
@@ -591,13 +605,35 @@ std::vector<float> ReadAudio(std::string_view file_bytes, int sample_rate,
   const size_t frame_count = data.size() / bytes_per_frame;
   if (frame_count == 0) {
     throw std::invalid_argument("WAV file has no samples");
-  } else if (static_cast<double>(frame_count) / file_sample_rate >
-             max_seconds) {
-    throw std::invalid_argument("audio is longer than " +
-                                std::to_string(static_cast<int>(max_seconds)) +
-                                " seconds");
   } else {
   }
+  return {format,          channel_count, file_sample_rate,
+          bits_per_sample, data,          frame_count};
+}
+
+} // namespace
+
+double WavDurationSeconds(std::string_view file_bytes, int sample_rate) {
+  const WavLayout layout = ParseWav(file_bytes, sample_rate);
+  const long divisor = std::gcd(static_cast<long>(layout.sample_rate),
+                                static_cast<long>(sample_rate));
+  const long up = sample_rate / divisor;
+  const long down = static_cast<long>(layout.sample_rate) / divisor;
+  // Resample's output length.
+  const long output_count =
+      (static_cast<long>(layout.frame_count) * up + down - 1) / down;
+  return static_cast<double>(output_count) / sample_rate;
+}
+
+std::vector<float> ReadAudio(std::string_view file_bytes, int sample_rate) {
+  const WavLayout layout = ParseWav(file_bytes, sample_rate);
+  const uint16_t format = layout.format;
+  const int channel_count = layout.channel_count;
+  const int bits_per_sample = layout.bits_per_sample;
+  const size_t frame_count = layout.frame_count;
+  const std::string_view data = layout.data;
+  const size_t bytes_per_sample = static_cast<size_t>(bits_per_sample) / 8;
+  const size_t bytes_per_frame = bytes_per_sample * channel_count;
   const auto *bytes = reinterpret_cast<const unsigned char *>(data.data());
   std::vector<float> samples(frame_count);
   for (size_t frame = 0; frame < frame_count; ++frame) {
@@ -612,14 +648,14 @@ std::vector<float> ReadAudio(std::string_view file_bytes, int sample_rate,
                              bits_per_sample);
       }
       // Note (Jiaxin Deng): the decoder divides the sum as unsigned and
-      // keeps the low 16 bits: the floor of the mean for two channels, and
-      // a wrapped value for a negative sum over more.
+      // keeps the low 16 bits, which for two channels is the floor of the
+      // mean.
       mono = static_cast<int16_t>(static_cast<uint16_t>(
           static_cast<uint32_t>(sum) / static_cast<uint32_t>(channel_count)));
     }
     samples[frame] = static_cast<float>(mono) / kPcm16FullScale;
   }
-  return Resample(samples, static_cast<int>(file_sample_rate), sample_rate);
+  return Resample(samples, static_cast<int>(layout.sample_rate), sample_rate);
 }
 
 std::vector<float> NormalizeLoudness(std::vector<float> samples,

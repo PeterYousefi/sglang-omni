@@ -54,11 +54,12 @@ def data_url(wav: bytes) -> str:
     return "data:audio/wav;base64," + base64.b64encode(wav).decode()
 
 
-def tone_wav(seconds: float, rate: int = 16000) -> bytes:
+def tone_wav(seconds: float, rate: int = 16000, channels: int = 1) -> bytes:
     samples = 0.3 * np.sin(2 * np.pi * 220 * np.arange(int(seconds * rate)) / rate)
+    samples = np.repeat(samples, channels)
     buffer = io.BytesIO()
     with wave.open(buffer, "wb") as writer:
-        writer.setnchannels(1)
+        writer.setnchannels(channels)
         writer.setsampwidth(2)
         writer.setframerate(rate)
         writer.writeframes((samples * 32767).astype("<i2").tobytes())
@@ -343,8 +344,8 @@ def test_chatterbox_rejects_another_model_than_its_chosen_name() -> None:
         ({"input": "hi", "speed": 2.0}, "speed must be 1.0 on this model"),
         ({"input": "hi", "max_new_tokens": 0}, "max_new_tokens must be greater than 0"),
         (
-            {"input": "hi", "max_new_tokens": 4097},
-            "max_new_tokens must be at most 4096",
+            {"input": "hi", "max_new_tokens": 1025},
+            "max_new_tokens must be at most 1024",
         ),
         ({"input": "hi", "max_new_tokens": 1.5}, "max_new_tokens must be an integer"),
         ({"input": "hi", "temperature": 0}, "temperature must be in (0"),
@@ -393,7 +394,15 @@ def test_chatterbox_rejects_another_model_than_its_chosen_name() -> None:
         ),
         (
             {"input": "hi", "ref_audio": data_url(tone_wav(61.0, rate=1000))},
-            "audio is longer than 60 seconds",
+            "reference audio must be at most 60 seconds",
+        ),
+        (
+            {"input": "hi", "ref_audio": data_url(tone_wav(6.0, channels=3))},
+            "WAV file has too many channels",
+        ),
+        (
+            {"input": "hi", "ref_audio": data_url(tone_wav(6.0, rate=65519))},
+            "WAV sample rate is out of range",
         ),
         (
             {"input": "hi", "ref_audio": "/etc/hosts"},

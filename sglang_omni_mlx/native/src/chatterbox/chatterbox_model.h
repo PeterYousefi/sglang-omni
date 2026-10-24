@@ -44,11 +44,11 @@ public:
   explicit ChatterboxModel(const std::filesystem::path &model_directory);
 
   const Voice &builtin_voice() const { return builtin_voice_; }
-  // A reference recording's 24 kHz samples; throws std::invalid_argument
-  // unless wav_bytes is a WAV file longer than 5 s and at most 60 s.
-  static std::vector<float> ReadReference(std::string_view wav_bytes);
-  // A voice cloned from ReadReference's samples.
-  Voice CloneVoice(std::vector<float> reference) const;
+  // Throws std::invalid_argument unless wav_bytes is a WAV file whose
+  // header gives more than 5 s and at most 60 s of audio; reads no samples.
+  static void CheckReference(std::string_view wav_bytes);
+  // A voice cloned from a recording CheckReference accepts.
+  Voice CloneVoice(std::string_view wav_bytes) const;
   // T3's text ids for text after NormalizePunctuation; throws
   // std::invalid_argument past kMaxTextTokens.
   std::vector<int> EncodeText(const std::string &text) const;

@@ -13,13 +13,15 @@
 namespace chatterbox {
 
 // A WAV file held in memory (integer PCM of 8, 16, 24 or 32 bits, IEEE float
-// of 32 or 64 bits, plain or WAVE_FORMAT_EXTENSIBLE, any channel count) as
-// mono float32 samples at sample_rate. Samples pass through PCM16 as a
-// 16-bit decoder would, channels are averaged, and other rates are resampled
-// with Resample. Throws std::invalid_argument for anything else, and for
-// audio longer than max_seconds, before decoding it.
-std::vector<float> ReadAudio(std::string_view file_bytes, int sample_rate,
-                             double max_seconds);
+// of 32 or 64 bits, plain or WAVE_FORMAT_EXTENSIBLE, mono or stereo) as mono
+// float32 samples at sample_rate. Samples pass through PCM16 as a 16-bit
+// decoder would, stereo is averaged, and other rates are resampled with
+// Resample. Throws std::invalid_argument for anything else.
+std::vector<float> ReadAudio(std::string_view file_bytes, int sample_rate);
+// The duration of the samples ReadAudio decodes from a WAV file at
+// sample_rate, read from its header alone; throws std::invalid_argument when
+// ReadAudio would.
+double WavDurationSeconds(std::string_view file_bytes, int sample_rate);
 
 // Polyphase resampling through a Kaiser-windowed sinc low-pass (64 zero
 // crossings) with the signal's edge values extended past both ends, filtered

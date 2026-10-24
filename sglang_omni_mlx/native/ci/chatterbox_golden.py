@@ -1,17 +1,21 @@
 # SPDX-License-Identifier: Apache-2.0
 """Chatterbox-Turbo golden check for check_golden.py: seeded speech requests through
-chatterbox_synthesize, whose text ids, cloned voice tokens and speech tokens a chip
-with golden outputs must give exactly. Another chip's GPU arithmetic may sample other
-tokens, so there only the text ids, which the tokenizer alone sets, must match.
+chatterbox_synthesize, whose text ids, cloned voice tokens, speech tokens and 16-bit
+audio a chip with golden outputs must give exactly. Another chip's GPU arithmetic may
+sample other tokens, so there only the text ids, which the tokenizer alone sets, must
+match.
 
 A golden file of kind chatterbox names its cases (text, seed, max_new_tokens, and a
 reference recording under the repository root to clone, or none for the built-in
-voice); each chip's outputs keep the speech tokens one second (25 tokens) per string,
-so a divergence reads as the second it starts at.
+voice). A case with voiced_token_count skips T3 and voices that many fixed speech
+tokens, so the flow and vocoder run at the server's token cap. Each chip's outputs
+keep the speech tokens one second (25 tokens) per string, so a divergence reads as the
+second it starts at, and the audio's SHA-256.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import subprocess
 import tempfile
@@ -19,6 +23,7 @@ from pathlib import Path
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 TOKENS_PER_SECOND = 25
+SPEECH_TOKEN_COUNT = 6561
 
 
 def joined(values: list[int]) -> str:
@@ -30,8 +35,24 @@ def synthesize(runtime_bin: Path, model_directory: Path, case: dict) -> dict:
     reference_flags = (
         ["--reference-audio", str(REPOSITORY_ROOT / reference)] if reference else []
     )
+    voiced_token_count = case.get("voiced_token_count")
+    # Fixed tokens spread over the vocabulary.
+    voiced_flags = (
+        [
+            "--speech-tokens",
+            joined(
+                [
+                    (index * 1103 + 7) % SPEECH_TOKEN_COUNT
+                    for index in range(voiced_token_count)
+                ]
+            ),
+        ]
+        if voiced_token_count
+        else []
+    )
     with tempfile.TemporaryDirectory(prefix="chatterbox-golden-") as directory:
         tokens_path = Path(directory) / "tokens.json"
+        audio_path = Path(directory) / "speech.wav"
         completed = subprocess.run(
             [
                 str(runtime_bin / "chatterbox_synthesize"),
@@ -45,13 +66,17 @@ def synthesize(runtime_bin: Path, model_directory: Path, case: dict) -> dict:
                 str(case["max_new_tokens"]),
                 "--tokens-output",
                 str(tokens_path),
+                "--output",
+                str(audio_path),
             ]
-            + reference_flags,  # fmt: skip
+            + reference_flags
+            + voiced_flags,  # fmt: skip
             check=True,
             capture_output=True,
             text=True,
         )
         tokens = json.loads(tokens_path.read_text())
+        audio_sha256 = hashlib.sha256(audio_path.read_bytes()).hexdigest()
     speech_tokens = tokens["speech_tokens"]
     return {
         "text_ids": joined(tokens["text_ids"]),
@@ -61,6 +86,7 @@ def synthesize(runtime_bin: Path, model_directory: Path, case: dict) -> dict:
             joined(speech_tokens[start : start + TOKENS_PER_SECOND])
             for start in range(0, len(speech_tokens), TOKENS_PER_SECOND)
         ],
+        "audio_sha256": audio_sha256,
     }
 
 
@@ -99,6 +125,8 @@ def difference(expected: dict, actual: dict | None) -> str | None:
         return (
             f"finished with {actual['finish_reason']}, not {expected['finish_reason']}"
         )
+    elif actual["audio_sha256"] != expected["audio_sha256"]:
+        return "has other audio from the same tokens"
     else:
         return None
 

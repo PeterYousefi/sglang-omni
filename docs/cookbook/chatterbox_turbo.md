@@ -28,7 +28,7 @@ curl -X POST http://localhost:8000/v1/audio/speech \
   --output output.wav
 ```
 
-Clone a voice from a WAV file longer than 5 seconds, as a path inside `--allowed-local-media-path` or as a base64 data URL; the transcript is not needed:
+Clone a voice from a mono or stereo WAV file longer than 5 seconds and at most 60 seconds, as a path inside `--allowed-local-media-path` or as a base64 data URL; the transcript is not needed:
 
 ```bash
 curl -X POST http://localhost:8000/v1/audio/speech \
@@ -50,10 +50,10 @@ curl -X POST http://localhost:8000/v1/audio/speech \
 | `input` | string | (required) | Text to speak, at most 4096 characters and 1024 text tokens |
 | `model` | string | served model | Must equal `--model-name` when that flag is given |
 | `voice` | string | `default` | Only `default`, the built-in voice |
-| `references` | list | none | One reference whose `audio_path`, `ref_audio`, `audio` or `data` holds a WAV file longer than 5 s |
+| `references` | list | none | One reference whose `audio_path`, `ref_audio`, `audio` or `data` holds a mono or stereo WAV file of more than 5 s and at most 60 s |
 | `ref_audio` / `ref_text` | string | none | Shorthand for `references[0]`; the text is not used |
 | `response_format` | string | `wav` | `wav` or `pcm` (16-bit, 24 kHz, mono) |
-| `max_new_tokens` | int | `1000` | Cap on speech tokens, 25 a second, at most 4096 |
+| `max_new_tokens` | int | `1000` | Cap on speech tokens, 25 a second, at most 1024; generation stops after exactly this many |
 | `temperature` | float | `0.8` | Sampling temperature, above 0 |
 | `top_k` | int | `1000` | Top-k filtering, `-1` for off |
 | `top_p` | float | `0.95` | Nucleus filtering, in (0, 1] |
@@ -82,11 +82,11 @@ Measured on an Apple M5 (24 GB, macOS 26.3.1), warm, with 20 Harvard sentences p
 
 The latency is end to end over HTTP and includes cloning the voice from the reference on every request. Peak MLX memory is about 3.4 to 3.9 GB, and the server is ready about 1.3 s after it starts.
 
-With the same seed and MLX build, the speech tokens of the native runtime are identical to the [mlx-audio](https://github.com/Blaizzy/mlx-audio) port on the same weights, and so is its audio in the built-in voice. A cloned voice's speech tokens are identical too, and its audio matches at an SNR of at least 90 dB, since the prompt mel is computed in float64 on the CPU rather than in float32. Mac CI checks four seeded requests (two in the built-in voice, one of them capped by `max_new_tokens`, and two cloned voices) against `sglang_omni_mlx/native/ci/model_golden/chatterbox-turbo.json`.
+With the same seed and MLX build, the speech tokens of the native runtime are identical to the [mlx-audio](https://github.com/Blaizzy/mlx-audio) port on the same weights, and so is its audio in the built-in voice. A cloned voice's speech tokens are identical too, and its audio matches at an SNR of at least 90 dB, since the prompt mel is computed in float64 on the CPU rather than in float32. Mac CI checks five seeded requests (two in the built-in voice, one of them capped by `max_new_tokens`, two cloned voices, and 1024 fixed speech tokens voiced at the token cap), their tokens and their audio, against `sglang_omni_mlx/native/ci/model_golden/chatterbox-turbo.json`.
 
 ### Known limitations
 
 - **About 10 seconds per request.** T3 stops after about 250 speech tokens (10 s of speech) however long the input is, so longer text should be sent one sentence or paragraph at a time.
-- **References must be longer than 5 seconds.** Only the first 15 s (for T3) and 10 s (for S3Gen) of a reference are used.
+- **References of 5 to 60 seconds.** Only the first 15 s (for T3) and 10 s (for S3Gen) are used, but loudness is measured over the whole recording, so a longer one is refused rather than cut.
 - **No streaming.** The whole utterance is generated before the response is sent.
 - **English.** Chatterbox-Turbo is an English model.

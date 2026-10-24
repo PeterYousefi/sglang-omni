@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "chatterbox/chatterbox_flow.h"
 
+#include <algorithm>
 #include <cmath>
 #include <string>
 #include <tuple>
@@ -86,20 +87,25 @@ mx::array SplitHeads(const mx::array &x, int heads, int head_dimension) {
   return mx::reshape(x, {x.shape(0), x.shape(1), heads, head_dimension});
 }
 
+// Sinusoids of relative positions from +(length - 1) down to -(length - 1),
+// [2 * length - 1, 512]; each row depends only on its position.
+mx::array RelativePositionTable(int length) {
+  const mx::array positions =
+      mx::expand_dims(mx::arange(0.0, length, 1.0, mx::float32), 1);
+  const mx::array positive = PositionSinusoids(positions);
+  const mx::array negative = PositionSinusoids(mx::negative(positions));
+  const mx::array descending = mx::arange(length - 1, -1, -1, mx::int32);
+  return mx::concatenate(
+      {mx::take(positive, descending, 0),
+       mx::slice(negative, {1, 0}, {length, kEncoderDimension})},
+      0);
+}
+
 } // namespace
 
 FlowDecoder::FlowDecoder(const qwen3_asr::Checkpoint &checkpoint)
-    : checkpoint_(checkpoint), relative_position_table_(0.0f) {
-  const mx::array positions = mx::expand_dims(
-      mx::arange(0.0, kPositionTableLength, 1.0, mx::float32), 1);
-  const mx::array positive = PositionSinusoids(positions);
-  const mx::array negative = PositionSinusoids(mx::negative(positions));
-  const mx::array descending =
-      mx::arange(kPositionTableLength - 1, -1, -1, mx::int32);
-  relative_position_table_ = mx::concatenate(
-      {mx::take(positive, descending, 0),
-       mx::slice(negative, {1, 0}, {kPositionTableLength, kEncoderDimension})},
-      0);
+    : checkpoint_(checkpoint),
+      relative_position_table_(RelativePositionTable(kPositionTableLength)) {
   mx::eval(relative_position_table_);
 }
 
@@ -131,11 +137,17 @@ FlowDecoder::EmbedStage(const mx::array &x, const std::string &prefix) const {
       normalized,
       mx::array(static_cast<float>(std::sqrt(double{kEncoderDimension}))));
   const int frames = x.shape(1);
-  const int center = kPositionTableLength - 1;
-  const mx::array positions = mx::expand_dims(
-      mx::slice(relative_position_table_, {center - frames + 1, 0},
-                {center + frames, kEncoderDimension}),
-      0);
+  // Note (Jiaxin Deng): a longer input gets a table of its own length, which
+  // holds the same rows around the center.
+  const int length = std::max(frames, kPositionTableLength);
+  const mx::array table = frames > kPositionTableLength
+                              ? RelativePositionTable(length)
+                              : relative_position_table_;
+  const int center = length - 1;
+  const mx::array positions =
+      mx::expand_dims(mx::slice(table, {center - frames + 1, 0},
+                                {center + frames, kEncoderDimension}),
+                      0);
   return {scaled, positions};
 }
 

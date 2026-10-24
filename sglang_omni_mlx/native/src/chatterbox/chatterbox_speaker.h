@@ -13,8 +13,10 @@ namespace chatterbox {
 
 class SpeakerEncoder {
 public:
-  // Reads the checkpoint's s3gen.speaker_encoder.* weights.
-  explicit SpeakerEncoder(const qwen3_asr::Checkpoint &checkpoint);
+  // Reads the checkpoint's CAM++ weights under weight_prefix (with its
+  // trailing dot), such as "s3gen.speaker_encoder.".
+  SpeakerEncoder(const qwen3_asr::Checkpoint &checkpoint,
+                 const std::string &weight_prefix);
 
   // The x-vector of 16 kHz samples, float32 [1, 192].
   mlx::core::array Embed(const std::vector<float> &samples_16k) const;

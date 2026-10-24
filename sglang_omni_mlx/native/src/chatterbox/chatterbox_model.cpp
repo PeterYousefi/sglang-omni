@@ -200,7 +200,8 @@ ChatterboxModel::ChatterboxModel(const std::filesystem::path &model_directory)
       t3_(checkpoint_), flow_(checkpoint_), vocoder_(checkpoint_),
       voice_encoder_(checkpoint_),
       speech_tokenizer_(speech_tokenizer_checkpoint_),
-      speaker_encoder_(checkpoint_), builtin_voice_([&] {
+      speaker_encoder_(checkpoint_, "s3gen.speaker_encoder."),
+      builtin_voice_([&] {
         const auto conditionals =
             mx::load_safetensors(
                 (model_directory / "conds.safetensors").string())
@@ -218,22 +219,21 @@ ChatterboxModel::ChatterboxModel(const std::filesystem::path &model_directory)
             builtin_voice_.flow.speaker_embedding, fade_in_});
 }
 
-std::vector<float> ChatterboxModel::ReadReference(std::string_view wav_bytes) {
-  std::vector<float> reference =
-      ReadAudio(wav_bytes, kOutputSampleRate, kMaxReferenceSeconds);
-  const double seconds =
-      static_cast<double>(reference.size()) / kOutputSampleRate;
+void ChatterboxModel::CheckReference(std::string_view wav_bytes) {
+  const double seconds = WavDurationSeconds(wav_bytes, kOutputSampleRate);
   if (!(seconds > kMinReferenceSeconds)) {
     throw std::invalid_argument(
         "reference audio must be longer than 5 seconds");
+  } else if (seconds > kMaxReferenceSeconds) {
+    throw std::invalid_argument("reference audio must be at most 60 seconds");
   } else {
   }
-  return reference;
 }
 
-Voice ChatterboxModel::CloneVoice(std::vector<float> reference) const {
-  reference = NormalizeLoudness(std::move(reference), kOutputSampleRate,
-                                kReferenceTargetLufs);
+Voice ChatterboxModel::CloneVoice(std::string_view wav_bytes) const {
+  const std::vector<float> reference =
+      NormalizeLoudness(ReadAudio(wav_bytes, kOutputSampleRate),
+                        kOutputSampleRate, kReferenceTargetLufs);
   const std::vector<float> reference_16k =
       Resample(reference, kOutputSampleRate, kTokenizerSampleRate);
   const std::vector<float> flow_reference =

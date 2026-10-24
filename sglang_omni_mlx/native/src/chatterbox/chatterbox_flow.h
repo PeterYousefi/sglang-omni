@@ -66,7 +66,8 @@ private:
                                const std::string &prefix) const;
 
   const qwen3_asr::Checkpoint &checkpoint_;
-  // Sinusoids of relative positions from +4999 down to -4999, [9999, 512].
+  // Relative positions from +4999 down to -4999, [9999, 512], for inputs
+  // up to 5000 frames.
   mlx::core::array relative_position_table_;
 };
 
