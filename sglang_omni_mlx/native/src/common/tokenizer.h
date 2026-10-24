@@ -9,16 +9,19 @@
 #include <unordered_map>
 #include <vector>
 
+#include "nlohmann/json_fwd.hpp"
+
 namespace qwen3_asr {
 
-// The regular expression that splits text into words before BPE.
+// The regular expression that splits vocab.json/merges.txt text into words.
 enum class SplitPattern { kQwen2, kGpt2 };
 
 class Tokenizer {
 public:
-  // Reads vocab.json, merges.txt and tokenizer_config.json from the checkpoint.
+  // Reads byte-level BPE from vocab.json/merges.txt or tokenizer.json.
   explicit Tokenizer(const std::filesystem::path &model_directory,
                      SplitPattern split_pattern = SplitPattern::kQwen2);
+  static Tokenizer FromJson(const nlohmann::json &tokenizer);
   ~Tokenizer();
   Tokenizer(const Tokenizer &) = delete;
   Tokenizer &operator=(const Tokenizer &) = delete;
@@ -31,6 +34,10 @@ public:
   int AddedTokenId(const std::string &content) const;
 
 private:
+  struct Serialized {};
+  Tokenizer(const nlohmann::json &tokenizer, Serialized);
+  void LoadJson(const nlohmann::json &tokenizer);
+
   struct AddedToken {
     std::string content;
     int id;
@@ -38,6 +45,7 @@ private:
   };
   struct Pcre2Regex;
 
+  void Initialize(const std::string &split_pattern);
   void EncodeOrdinary(const std::string &text, std::vector<int> &ids) const;
   void EncodeWord(const std::string &byte_level_word,
                   std::vector<int> &ids) const;
@@ -48,8 +56,9 @@ private:
   std::vector<AddedToken> added_tokens_;
   std::unordered_map<int, size_t> added_token_index_by_id_;
   std::unique_ptr<Pcre2Regex> split_pattern_;
-  // Qwen2 text is NFC-normalized before the split; GPT-2 text is not.
-  bool normalizes_nfc_;
+  // Qwen2 and tokenizer.json text is NFC-normalized before the split; GPT-2
+  // text is not.
+  bool normalizes_nfc_ = true;
 };
 
 } // namespace qwen3_asr
