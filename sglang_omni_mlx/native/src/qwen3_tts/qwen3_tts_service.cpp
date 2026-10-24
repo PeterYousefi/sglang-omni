@@ -11,11 +11,10 @@ namespace qwen3_tts {
 
 class SpeechService final : public omni_server::Service {
 public:
-  explicit SpeechService(const std::filesystem::path &directory) {
-    worker_ = std::make_unique<tts_service::SynthesisWorker>(
-        [this, directory] { model_ = std::make_unique<Model>(directory); },
-        [this] { model_.reset(); });
-  }
+  explicit SpeechService(const std::filesystem::path &directory)
+      : worker_(
+            [this, directory] { model_ = std::make_unique<Model>(directory); },
+            [this] { model_.reset(); }) {}
 
   void SetModelName(const std::string &name, bool chosen) override {
     model_name_ = chosen ? name : std::string();
@@ -31,10 +30,10 @@ public:
   }
 
   std::map<std::string, int> RequestStates() const override {
-    return worker_->RequestStates();
+    return worker_.RequestStates();
   }
 
-  void CancelAll() override { worker_->Stop(); }
+  void CancelAll() override { worker_.Stop(); }
 
 private:
   int Handle(mg_connection *connection) {
@@ -57,28 +56,19 @@ private:
                                         : tts_service::AudioFormat::Wav;
       tts_service::AudioResponse response(connection, format);
       auto job = std::make_shared<tts_service::SynthesisWorker::Job<Result>>();
-      // Note (Akazaakane): The worker owns the job until completion; a raw
-      // pointer avoids a self-owning callback cycle.
-      auto *running = job.get();
-      job->synthesize = [this, request, running, &response](
+      job->synthesize = [this, &request, &response](
                             const std::function<void()> &check_cancelled) {
-        try {
-          check_cancelled();
-          if (request.stream) {
-            return model_->Synthesize(
-                request, running->cancelled,
-                [&](const std::vector<float> &samples) {
-                  response.WritePcm(EncodeAudio(samples, true), kSampleRate, 1);
-                });
-          } else {
-            return model_->Synthesize(request, running->cancelled);
-          }
-        } catch (const Cancelled &) {
-          throw tts_service::SynthesisCancelled();
+        if (request.stream) {
+          return model_->Synthesize(
+              request, check_cancelled, [&](const std::vector<float> &samples) {
+                response.WritePcm(EncodeAudio(samples, true), kSampleRate, 1);
+              });
+        } else {
+          return model_->Synthesize(request, check_cancelled);
         }
       };
       return response.SubmitAndRespond(
-          *worker_, job,
+          worker_, job,
           [&](const Result &result) {
             if (!request.stream) {
               response.WritePcm(EncodeAudio(result.samples, true), kSampleRate,
@@ -101,7 +91,7 @@ private:
 
   std::string model_name_;
   std::unique_ptr<Model> model_;
-  std::unique_ptr<tts_service::SynthesisWorker> worker_;
+  tts_service::SynthesisWorker worker_;
 };
 
 } // namespace qwen3_tts

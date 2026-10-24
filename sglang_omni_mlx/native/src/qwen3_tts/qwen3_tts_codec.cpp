@@ -83,9 +83,10 @@ mx::array AudioCodec::Convolve(const mx::array &hidden,
              : output;
 }
 
-mx::array AudioCodec::Transformer(mx::array hidden, const std::string &prefix,
-                                  const nlohmann::json &config, State *state,
-                                  const std::atomic<bool> &cancelled) const {
+mx::array
+AudioCodec::Transformer(mx::array hidden, const std::string &prefix,
+                        const nlohmann::json &config, State *state,
+                        const std::function<void()> &check_cancelled) const {
   const bool encoder = prefix.starts_with("encoder.");
   const int length = hidden.shape(1);
   const int heads = config.at("num_attention_heads");
@@ -99,7 +100,7 @@ mx::array AudioCodec::Transformer(mx::array hidden, const std::string &prefix,
                                 : config.at("rms_norm_eps").get<float>();
   for (int layer = 0; layer < config.at("num_hidden_layers").get<int>();
        ++layer) {
-    CheckCancelled(cancelled);
+    check_cancelled();
     const auto stem = prefix + ".layers." + std::to_string(layer);
     const auto normalize = [&](const mx::array &values,
                                const std::string &name) {
@@ -194,8 +195,9 @@ mx::array AudioCodec::Snake(const mx::array &hidden,
          mx::reciprocal(beta + mx::array(1e-9f, beta.dtype())) * (sine * sine);
 }
 
-mx::array AudioCodec::Decode(const mx::array &codes, State &state,
-                             const std::atomic<bool> &cancelled) const {
+mx::array
+AudioCodec::Decode(const mx::array &codes, State &state,
+                   const std::function<void()> &check_cancelled) const {
   if (codes.ndim() != 2 || codes.shape(0) == 0 ||
       codes.shape(1) != kCodeGroups) {
     throw std::invalid_argument("codec codes must have shape [frames,16]");
@@ -224,8 +226,8 @@ mx::array AudioCodec::Decode(const mx::array &codes, State &state,
   auto hidden =
       Convolve(partitions[0] + partitions[1], "decoder.pre_conv.conv", &state);
   hidden = checkpoint_.Linear(hidden, "decoder.pre_transformer.input_proj");
-  hidden =
-      Transformer(hidden, "decoder.pre_transformer", config, &state, cancelled);
+  hidden = Transformer(hidden, "decoder.pre_transformer", config, &state,
+                       check_cancelled);
   const auto promoted = mx::astype(hidden, mx::float32);
   const auto normalized =
       promoted * mx::rsqrt(mx::mean(promoted * promoted, -1, true) +
@@ -236,7 +238,7 @@ mx::array AudioCodec::Decode(const mx::array &codes, State &state,
   hidden = checkpoint_.Linear(hidden, "decoder.pre_transformer.output_proj");
   const auto ratios = config.at("upsampling_ratios").get<std::vector<int>>();
   for (size_t index = 0; index < ratios.size(); ++index) {
-    CheckCancelled(cancelled);
+    check_cancelled();
     const auto stem = "decoder.upsample." + std::to_string(index);
     hidden =
         Convolve(hidden, stem + ".0.conv", nullptr, ratios[index], 1, 1, true);
@@ -251,7 +253,7 @@ mx::array AudioCodec::Decode(const mx::array &codes, State &state,
   hidden = Convolve(hidden, "decoder.decoder.0.conv", &state);
   const auto rates = config.at("upsample_rates").get<std::vector<int>>();
   for (size_t index = 0; index < rates.size(); ++index) {
-    CheckCancelled(cancelled);
+    check_cancelled();
     const auto stem = "decoder.decoder." + std::to_string(index + 1) + ".block";
     hidden = Convolve(Snake(hidden, stem + ".0"), stem + ".1.conv", &state,
                       rates[index], 1, 1, true);
@@ -281,8 +283,9 @@ mx::array AudioCodec::Decode(const mx::array &codes, State &state,
                      {-1});
 }
 
-mx::array AudioCodec::Encode(const std::vector<float> &samples,
-                             const std::atomic<bool> &cancelled) const {
+mx::array
+AudioCodec::Encode(const std::vector<float> &samples,
+                   const std::function<void()> &check_cancelled) const {
   const auto &config = config_.at("encoder_config");
   auto hidden = mx::array(
       samples.data(), {1, static_cast<int>(samples.size()), 1}, mx::float32);
@@ -290,7 +293,7 @@ mx::array AudioCodec::Encode(const std::vector<float> &samples,
   const auto ratios = config.at("upsampling_ratios").get<std::vector<int>>();
   int layer = 1;
   for (auto ratio = ratios.rbegin(); ratio != ratios.rend(); ++ratio) {
-    CheckCancelled(cancelled);
+    check_cancelled();
     const auto stem = "encoder.encoder.layers." + std::to_string(layer);
     auto transformed = Convolve(Elu(hidden), stem + ".block.1.conv", nullptr);
     hidden =
@@ -305,7 +308,7 @@ mx::array AudioCodec::Encode(const std::vector<float> &samples,
       Elu(hidden),
       "encoder.encoder.layers." + std::to_string(layer + 1) + ".conv", nullptr);
   hidden = Transformer(hidden, "encoder.encoder_transformer", config, nullptr,
-                       cancelled);
+                       check_cancelled);
   hidden = Convolve(hidden, "encoder.downsample.conv", nullptr, 2, 1, 1, false,
                     "edge");
   std::vector<mx::array> codes;
@@ -316,7 +319,7 @@ mx::array AudioCodec::Encode(const std::vector<float> &samples,
     auto residual = Convolve(hidden, stem + ".input_proj", nullptr);
     const int count = partition == 0 ? 1 : kCodeGroups - 1;
     for (int group = 0; group < count; ++group) {
-      CheckCancelled(cancelled);
+      check_cancelled();
       const auto &table = checkpoint_.Weight(
           stem + ".layers." + std::to_string(group) + ".codebook.embed.weight");
       const auto table32 = mx::astype(table, mx::float32);

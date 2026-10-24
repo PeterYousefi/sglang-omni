@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <algorithm>
-#include <atomic>
 #include <fstream>
+#include <functional>
 #include <iostream>
 
 #include "qwen3_tts/qwen3_tts_model.h"
@@ -44,7 +44,7 @@ int main(int argc, char **argv) {
     } else {
     }
     mlx::core::set_cache_limit(1024ULL * 1024 * 1024);
-    const std::atomic<bool> cancelled{false};
+    const std::function<void()> check_cancelled = [] {};
     qwen3_tts::Result result;
     nlohmann::json diagnostics;
     if (!decode_path.empty()) {
@@ -82,7 +82,7 @@ int main(int argc, char **argv) {
         auto waveform = mlx::core::astype(
             codec.Decode(mlx::core::slice(code_array, {start, 0},
                                           {end, qwen3_tts::kCodeGroups}),
-                         state, cancelled),
+                         state, check_cancelled),
             mlx::core::float32);
         mlx::core::eval(waveform);
         result.samples.insert(result.samples.end(), waveform.data<float>(),
@@ -95,7 +95,7 @@ int main(int argc, char **argv) {
       auto body = qwen3_asr::ReadJson(request_path);
       body["stream"] = false;
       const auto request = model.ParseRequest(body, "");
-      result = model.Synthesize(request, cancelled);
+      result = model.Synthesize(request, check_cancelled);
       diagnostics["prompt_ids"] = request.text_ids;
       diagnostics["control_ids"] = request.control_ids;
       diagnostics["instruction_ids"] = request.instruction_ids;

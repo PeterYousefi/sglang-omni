@@ -263,18 +263,11 @@ mx::array Model::Sample(mx::array logits, const Sampling &sampling,
       {1, 1});
 }
 
-void CheckCancelled(const std::atomic<bool> &cancelled) {
-  if (cancelled.load()) {
-    throw Cancelled();
-  } else {
-  }
-}
-
 Result Model::Synthesize(
-    const Request &request, const std::atomic<bool> &cancelled,
+    const Request &request, const std::function<void()> &check_cancelled,
     const std::function<void(const std::vector<float> &)> &emit) const {
-  CheckCancelled(cancelled);
-  const auto prompt = BuildPrompt(request, cancelled);
+  check_cancelled();
+  const auto prompt = BuildPrompt(request, check_cancelled);
   if (prompt.embeddings.shape(1) + request.max_frames >
       talker_config_.at("max_position_embeddings").get<int>()) {
     throw std::invalid_argument(
@@ -293,11 +286,11 @@ Result Model::Synthesize(
       return;
     } else {
     }
-    auto waveform = mx::astype(
-        codec_.Decode(mx::concatenate(pending, 0), codec_state, cancelled),
-        mx::float32);
+    auto waveform = mx::astype(codec_.Decode(mx::concatenate(pending, 0),
+                                             codec_state, check_cancelled),
+                               mx::float32);
     mx::eval(waveform);
-    CheckCancelled(cancelled);
+    check_cancelled();
     const std::vector<float> samples(waveform.data<float>(),
                                      waveform.data<float>() + waveform.size());
     if (emit) {
@@ -310,12 +303,12 @@ Result Model::Synthesize(
   };
   if (prompt.reference_codes.has_value()) {
     auto warmup =
-        codec_.Decode(*prompt.reference_codes, codec_state, cancelled);
+        codec_.Decode(*prompt.reference_codes, codec_state, check_cancelled);
     mx::eval(warmup);
   } else {
   }
   for (int frame = 0; frame < request.max_frames; ++frame) {
-    CheckCancelled(cancelled);
+    check_cancelled();
     const auto hidden = checkpoint_.RmsNorm(
         talker_.Forward(embeddings, caches), "talker.model.norm",
         talker_config_.at("rms_norm_eps").get<float>());
@@ -336,7 +329,7 @@ Result Model::Synthesize(
     auto summed = checkpoint_.Embed(semantic, "talker.model.codec_embedding");
     auto predictor_input = mx::concatenate({last, summed}, 1);
     for (int group = 0; group < kCodeGroups - 1; ++group) {
-      CheckCancelled(cancelled);
+      check_cancelled();
       if (checkpoint_.Has(
               "talker.code_predictor.small_to_mtp_projection.weight")) {
         predictor_input = checkpoint_.Linear(
@@ -365,7 +358,7 @@ Result Model::Synthesize(
                                : prompt.pad);
     const auto complete_frame = mx::concatenate(codes, 1);
     mx::eval({complete_frame, embeddings});
-    CheckCancelled(cancelled);
+    check_cancelled();
     result.codes.emplace_back(complete_frame.data<int>(),
                               complete_frame.data<int>() + kCodeGroups);
     pending.push_back(complete_frame);

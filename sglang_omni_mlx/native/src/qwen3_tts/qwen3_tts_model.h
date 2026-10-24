@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
-#include <atomic>
 #include <cstdint>
 #include <functional>
 #include <map>
@@ -56,12 +55,6 @@ struct Result {
   std::string finish_reason;
 };
 
-class Cancelled : public std::runtime_error {
-public:
-  Cancelled() : std::runtime_error("Qwen3-TTS synthesis cancelled") {}
-};
-
-void CheckCancelled(const std::atomic<bool> &cancelled);
 std::string EncodeAudio(const std::vector<float> &samples, bool pcm);
 std::vector<float> DecodeReferenceWav(const std::string &bytes);
 
@@ -81,7 +74,7 @@ public:
   Request ParseRequest(const nlohmann::json &body,
                        const std::string &model_name) const;
   Result Synthesize(
-      const Request &request, const std::atomic<bool> &cancelled,
+      const Request &request, const std::function<void()> &check_cancelled,
       const std::function<void(const std::vector<float> &)> &emit = {}) const;
 
 private:
@@ -94,7 +87,7 @@ private:
   mlx::core::array Text(const std::vector<int> &ids) const;
   mlx::core::array CodecEmbedding(const std::vector<int> &ids) const;
   Prompt BuildPrompt(const Request &request,
-                     const std::atomic<bool> &cancelled) const;
+                     const std::function<void()> &check_cancelled) const;
   mlx::core::array SpeakerEmbedding(const std::vector<float> &samples) const;
   mlx::core::array Sample(mlx::core::array logits, const Sampling &sampling,
                           mlx::core::random::KeySequence &random_sequence,

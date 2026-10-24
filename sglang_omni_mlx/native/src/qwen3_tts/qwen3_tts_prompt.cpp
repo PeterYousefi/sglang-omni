@@ -4,8 +4,9 @@
 namespace qwen3_tts {
 namespace mx = mlx::core;
 
-Model::Prompt Model::BuildPrompt(const Request &request,
-                                 const std::atomic<bool> &cancelled) const {
+Model::Prompt
+Model::BuildPrompt(const Request &request,
+                   const std::function<void()> &check_cancelled) const {
   const auto special =
       Text({config_.at("tts_bos_token_id"), config_.at("tts_eos_token_id"),
             config_.at("tts_pad_token_id")});
@@ -15,12 +16,12 @@ Model::Prompt Model::BuildPrompt(const Request &request,
   auto control = CodecEmbedding(request.control_ids);
   std::optional<mx::array> reference_codes;
   if (!request.reference_samples.empty()) {
-    CheckCancelled(cancelled);
+    check_cancelled();
     const auto speaker = mx::astype(SpeakerEmbedding(request.reference_samples),
                                     control.dtype());
-    CheckCancelled(cancelled);
+    check_cancelled();
     control = mx::concatenate({control, speaker}, 1);
-    reference_codes = codec_.Encode(request.reference_samples, cancelled);
+    reference_codes = codec_.Encode(request.reference_samples, check_cancelled);
   } else {
   }
   const int codec_pad = talker_config_.at("codec_pad_id");

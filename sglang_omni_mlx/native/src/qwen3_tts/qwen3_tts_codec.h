@@ -2,7 +2,7 @@
 // Copyright (c) 2025 Prince Canuma and contributors.
 #pragma once
 
-#include <atomic>
+#include <functional>
 #include <map>
 #include <string>
 #include <vector>
@@ -22,9 +22,9 @@ public:
 
   explicit AudioCodec(const std::filesystem::path &directory, bool encoder);
   mlx::core::array Decode(const mlx::core::array &codes, State &state,
-                          const std::atomic<bool> &cancelled) const;
+                          const std::function<void()> &check_cancelled) const;
   mlx::core::array Encode(const std::vector<float> &samples,
-                          const std::atomic<bool> &cancelled) const;
+                          const std::function<void()> &check_cancelled) const;
 
 private:
   static qwen3_asr::WeightMap
@@ -35,10 +35,10 @@ private:
                             int stride = 1, int dilation = 1, int groups = 1,
                             bool transpose = false,
                             const std::string &pad_mode = "constant") const;
-  mlx::core::array Transformer(mlx::core::array hidden,
-                               const std::string &prefix,
-                               const nlohmann::json &config, State *state,
-                               const std::atomic<bool> &cancelled) const;
+  mlx::core::array
+  Transformer(mlx::core::array hidden, const std::string &prefix,
+              const nlohmann::json &config, State *state,
+              const std::function<void()> &check_cancelled) const;
   mlx::core::array Snake(const mlx::core::array &hidden,
                          const std::string &prefix) const;
 
