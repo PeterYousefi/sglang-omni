@@ -34,6 +34,7 @@
 #include <deque>
 #include <filesystem>
 #include <iostream>
+#include <limits>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -189,7 +190,11 @@ double NumberField(const Json &body, const char *name, double fallback) {
 // A JSON integer field, or fallback when missing or null.
 int64_t IntegerField(const Json &body, const char *name, int64_t fallback) {
   const Json value = FieldOr(body, name, Json(fallback));
-  if (!value.is_number_integer()) {
+  // Note (Jiaxin Deng): an unsigned value past INT64_MAX would wrap negative.
+  if (!value.is_number_integer() ||
+      (value.is_number_unsigned() &&
+       value.get<uint64_t>() >
+           static_cast<uint64_t>(std::numeric_limits<int64_t>::max()))) {
     throw std::invalid_argument(std::string(name) + " must be an integer");
   } else {
     return value.get<int64_t>();

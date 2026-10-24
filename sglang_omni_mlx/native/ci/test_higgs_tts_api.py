@@ -470,6 +470,7 @@ def test_higgs_rejects_another_model_than_its_chosen_name() -> None:
         ({"input": "hi", "top_p": 1.5}, "top_p must be above 0 and at most 1"),
         ({"input": "hi", "top_k": 0}, "top_k must be -1 (off) or at least 1"),
         ({"input": "hi", "top_k": 2.0}, "top_k must be an integer"),
+        ({"input": "hi", "top_k": 2**64 - 1}, "top_k must be an integer"),
         ({"input": "hi", "seed": -1}, "seed must be a non-negative integer"),
         ({"input": "hi", "seed": "1"}, "seed must be a non-negative integer"),
         ({"input": "hi", "speed": 2.0}, "speed must be 1.0 on this model"),
