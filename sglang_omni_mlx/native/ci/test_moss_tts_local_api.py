@@ -178,7 +178,12 @@ def test_moss_streams_the_mono_pcm_of_its_wav(moss_server: Server) -> None:
 def test_moss_stops_at_max_new_tokens(moss_server: Server) -> None:
     status, headers, pcm = speak(
         moss_server,
-        {"input": SENTENCE, "response_format": "pcm", "max_new_tokens": 10},
+        {
+            "input": SENTENCE,
+            "response_format": "pcm",
+            "max_new_tokens": 10,
+            "seed": SEED,
+        },
     )
     assert status == 200
     assert (headers["X-Finish-Reason"], headers["X-Completion-Tokens"]) == (
@@ -196,6 +201,7 @@ def test_moss_speed_resamples_to_the_cuda_length(moss_server: Server) -> None:
             "response_format": "pcm",
             "max_new_tokens": 9,
             "speed": 2.0,
+            "seed": SEED,
         },
     )
     assert status == 200
@@ -228,15 +234,22 @@ def test_moss_half_closed_client_counts_as_gone(moss_server: Server) -> None:
 
 
 def test_moss_refuses_requests_beyond_its_queue(moss_server: Server) -> None:
+    # A queued stream gets its 200 only once it starts, as on CUDA.
     with (
         open_speech_stream(moss_server, LONG_SENTENCE) as running,
-        open_speech_stream(moss_server, LONG_SENTENCE),
+        send_speech_request(
+            moss_server,
+            {"input": LONG_SENTENCE, "response_format": "pcm", "stream": True},
+        ),
     ):
         assert running.recv(65536)
-        assert request_states(moss_server) == {
+        started_at = time.monotonic()
+        while request_states(moss_server) != {
             "running": 1,
             "queued": MAX_QUEUED_REQUESTS,
-        }
+        }:
+            assert time.monotonic() - started_at < 8.0
+            time.sleep(0.05)
         status, _, body = speak(moss_server, {"input": "hi"})
         assert (status, json.loads(body)) == (
             503,
@@ -278,6 +291,7 @@ def test_moss_accepts_the_cuda_fields_it_passes_over(moss_server: Server) -> Non
             "x_vector_only_mode": True,
             "response_format": "　PCM ",
             "max_new_tokens": 1,
+            "seed": SEED,
         },
     )
     assert status == 200
@@ -298,6 +312,7 @@ def test_moss_rejects_another_model_than_its_chosen_name() -> None:
                 "model": CHOSEN_MODEL_NAME,
                 "response_format": "pcm",
                 "max_new_tokens": 1,
+                "seed": SEED,
             },
         )
         assert status == 200
@@ -328,6 +343,9 @@ def test_moss_rejects_another_model_than_its_chosen_name() -> None:
         ({"input": "hi", "token_count": -1}, "token_count must be greater than 0"),
         ({"input": "${token:0} hi"}, "the ${token:N} count must be greater than 0"),
         ({"input": "${token:x} hi"}, "the ${token:N} prefix must hold"),
+        ({"input": "${token:22501} hi"}, "the ${token:N} count must be at most"),
+        ({"input": "hi", "seed": 2**64}, "seed must be an integer"),
+        ({"input": "hi", "x_vector_only_mode": "yes"}, "x_vector_only_mode must be"),
         ({"input": "hi", "seed": -1}, "seed must be greater than or equal to 0"),
         ({"input": "hi", "temperature": "hot"}, "temperature must be a number"),
         ({"input": "hi", "temperature": -0.1}, "temperature must be >= 0"),

@@ -35,6 +35,7 @@
 #include <deque>
 #include <filesystem>
 #include <iostream>
+#include <limits>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -99,6 +100,9 @@ constexpr std::array<const char *, 6> kIntegerFields = {
     "max_new_tokens", "initial_codec_chunk_frames",
     "token_count",    "duration_tokens",
     "seed",           "top_k"};
+// Flags of CUDA's request this model passes over, still type-checked.
+constexpr std::array<const char *, 3> kBooleanFields = {
+    "x_vector_only_mode", "stream_codec_output", "suppress_bootstrap_silence"};
 constexpr std::array<const char *, 4> kNumberFields = {
     "speed", "temperature", "top_p", "repetition_penalty"};
 
@@ -186,6 +190,26 @@ void CheckFieldTypes(const Json &body) {
     throw std::invalid_argument("stream must be a boolean");
   } else {
   }
+  for (const char *field : kBooleanFields) {
+    if (!FieldOr(body, field, Json(false)).is_boolean()) {
+      throw std::invalid_argument(std::string(field) + " must be a boolean");
+    } else {
+    }
+  }
+}
+
+// Whether an integer field holds a negative value. JSON parsing keeps every
+// non-negative integer unsigned, up to 2^64 - 1.
+bool IsNegative(const Json &value) {
+  return !value.is_number_unsigned() && value.get<int64_t>() < 0;
+}
+
+// An integer field's value at most maximum, or maximum when it is larger.
+int64_t ClampedInteger(const Json &value, int64_t maximum) {
+  return value.is_number_unsigned()
+             ? static_cast<int64_t>(
+                   std::min<uint64_t>(value.get<uint64_t>(), maximum))
+             : std::min<int64_t>(value.get<int64_t>(), maximum);
 }
 
 // An integer field that must be above 0 when given.
@@ -194,9 +218,9 @@ std::optional<int> PositiveInteger(const Json &body, const char *name,
   const Json value = FieldOr(body, name, Json());
   if (value.is_null()) {
     return std::nullopt;
-  } else if (value.get<int64_t>() <= 0) {
+  } else if (IsNegative(value) || value.get<uint64_t>() == 0) {
     throw std::invalid_argument(std::string(name) + " must be greater than 0");
-  } else if (value.get<int64_t>() > maximum) {
+  } else if (value.get<uint64_t>() > static_cast<uint64_t>(maximum)) {
     throw std::invalid_argument(std::string(name) + " must be at most " +
                                 std::to_string(maximum));
   } else {
@@ -215,21 +239,28 @@ SplitTokenPrefix(const std::string &text) {
   }
   const size_t digits_end = text.find_first_not_of("0123456789", start.size());
   if (digits_end == start.size() || digits_end == std::string::npos ||
-      text[digits_end] != '}' || digits_end - start.size() > 9) {
+      text[digits_end] != '}') {
     throw std::invalid_argument(
         "the ${token:N} prefix must hold a positive integer");
   } else {
   }
-  const int count =
-      std::stoi(text.substr(start.size(), digits_end - start.size()));
+  const size_t significant_start =
+      std::min(text.find_first_not_of('0', start.size()), digits_end);
+  // Note (Jiaxin Deng): ten significant digits already exceed the cap.
+  const std::string digits = text.substr(
+      significant_start, std::min<size_t>(digits_end - significant_start, 10));
+  const int64_t count = digits.empty() ? 0 : std::stoll(digits);
   if (count <= 0) {
     throw std::invalid_argument("the ${token:N} count must be greater than 0");
+  } else if (count > kMaxAudioFrames) {
+    throw std::invalid_argument("the ${token:N} count must be at most " +
+                                std::to_string(kMaxAudioFrames));
   } else {
   }
   const size_t text_start =
       text.find_first_not_of(" \t\n\v\f\r", digits_end + 1);
   return {text_start == std::string::npos ? "" : text.substr(text_start),
-          count};
+          static_cast<int>(count)};
 }
 
 moss_tts_local::SamplingParameters
@@ -247,7 +278,10 @@ OverrideSampling(moss_tts_local::SamplingParameters defaults,
   } else {
   }
   if (!top_k.is_null()) {
-    defaults.top_k = top_k.get<int>();
+    // A top_k past the vocabulary keeps every candidate, as one at it does.
+    defaults.top_k = static_cast<int>(std::max<int64_t>(
+        ClampedInteger(top_k, std::numeric_limits<int>::max()),
+        std::numeric_limits<int>::min()));
   } else {
   }
   return defaults;
@@ -379,7 +413,7 @@ SpeechRequest ParseRequest(const Json &body,
   const std::optional<int> duration_tokens =
       PositiveInteger(body, "duration_tokens", kMaxAudioFrames);
   for (const char *field : {"seed", "initial_codec_chunk_frames"}) {
-    if (FieldOr(body, field, Json(0)).get<int64_t>() < 0) {
+    if (IsNegative(FieldOr(body, field, Json(0)))) {
       throw std::invalid_argument(std::string(field) +
                                   " must be greater than or equal to 0");
     } else {
@@ -420,9 +454,8 @@ SpeechRequest ParseRequest(const Json &body,
   } else {
     request.generation.seed = seed.get<uint64_t>();
   }
-  const int initial_chunk_frames = static_cast<int>(std::min<int64_t>(
-      FieldOr(body, "initial_codec_chunk_frames", Json(5)).get<int64_t>(),
-      kMaxChunkFrames));
+  const int initial_chunk_frames = static_cast<int>(ClampedInteger(
+      FieldOr(body, "initial_codec_chunk_frames", Json(5)), kMaxChunkFrames));
   request.first_chunk_frames =
       initial_chunk_frames > 0 ? initial_chunk_frames : kMaxChunkFrames;
   request.prompt_rows = model.prompt_encoder().Rows(request.prompt);
@@ -718,16 +751,10 @@ private:
           }
           channel->ready.notify_all();
         });
-    if (request.stream) {
-      mg_printf(connection,
-                "HTTP/1.1 200 OK\r\nContent-Type: audio/pcm\r\n"
-                "X-Request-Id: %s\r\nX-SGLang-Omni-Speech-Id: %s\r\n"
-                "X-Sample-Rate: %d\r\nX-Channels: 1\r\nX-Bit-Depth: 16\r\n"
-                "Cache-Control: no-cache\r\nConnection: close\r\n\r\n",
-                request_id.c_str(), request_id.c_str(), sample_rate);
-    } else {
-    }
 
+    // Note (Jiaxin Deng): as the CUDA server, a stream's 200 waits for its
+    // first audio, so a request that fails before any still gets 500 or 504.
+    bool stream_started = false;
     const int client_socket = ClientSocket(connection);
     std::vector<float> samples;
     bool timed_out = false;
@@ -761,6 +788,16 @@ private:
       channel->chunks.pop_front();
       lock.unlock();
       if (request.stream) {
+        if (!stream_started) {
+          mg_printf(connection,
+                    "HTTP/1.1 200 OK\r\nContent-Type: audio/pcm\r\n"
+                    "X-Request-Id: %s\r\nX-SGLang-Omni-Speech-Id: %s\r\n"
+                    "X-Sample-Rate: %d\r\nX-Channels: 1\r\nX-Bit-Depth: 16\r\n"
+                    "Cache-Control: no-cache\r\nConnection: close\r\n\r\n",
+                    request_id.c_str(), request_id.c_str(), sample_rate);
+          stream_started = true;
+        } else {
+        }
         const std::string pcm =
             moss_tts_local::Pcm16Bytes(Shape(chunk, request));
         // Note (Jiaxin Deng): a write fails once the peer is gone, which
@@ -798,7 +835,7 @@ private:
       LogFailure(channel->error);
     } else {
     }
-    if (request.stream) {
+    if (stream_started) {
       return 200;
     } else if (timed_out) {
       return omni_server::WriteJson(

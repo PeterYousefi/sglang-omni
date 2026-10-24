@@ -92,11 +92,18 @@ mx::array KeepTopP(const mx::array &logits, double top_p) {
       mx::zeros_like(ascending), ascending,
       mx::reshape(mx::arange(vocabulary, ascending.dtype()), {1, vocabulary}),
       -1);
-  const mx::array kept =
-      mx::where(mx::greater(mx::take_along_axis(cumulative, inverse, -1),
-                            mx::array(static_cast<float>(1.0 - top_p),
-                                      cumulative.dtype())),
-                log_probabilities, NegativeInfinity(log_probabilities.dtype()));
+  // Note (Jiaxin Deng): the most likely candidate always stays, as CUDA's
+  // filter keeps it; a top_p below bfloat16's resolution would otherwise
+  // leave none. For any larger top_p it passes anyway.
+  const mx::array most_likely =
+      mx::equal(mx::reshape(mx::arange(vocabulary), {1, vocabulary}),
+                mx::argmax(log_probabilities, -1, true));
+  const mx::array kept = mx::where(
+      mx::logical_or(mx::greater(mx::take_along_axis(cumulative, inverse, -1),
+                                 mx::array(static_cast<float>(1.0 - top_p),
+                                           cumulative.dtype())),
+                     most_likely),
+      log_probabilities, NegativeInfinity(log_probabilities.dtype()));
   return mx::where(mx::equal(kept, NegativeInfinity(kept.dtype())),
                    NegativeInfinity(logits.dtype()), logits);
 }
