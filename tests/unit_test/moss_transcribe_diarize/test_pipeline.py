@@ -27,6 +27,7 @@ from sglang_omni.models.moss_transcribe_diarize.stages import (
 )
 from sglang_omni.preprocessing.audio import decode_audio_bytes
 from sglang_omni.scheduling.generation_batch_policy import (
+    CudaGraphConfig,
     build_default_prefill_cuda_graph_bs,
     build_generation_batch_overrides,
 )
@@ -535,19 +536,28 @@ def test_factory_preserves_trimmed_fbank_opt_out(
 
 
 @pytest.mark.parametrize("explicit_cap", [None, 7])
+@pytest.mark.parametrize("graph_config_kind", ["dict", "native"])
 def test_partial_graph_override_preserves_prefill_capacity(
-    monkeypatch: pytest.MonkeyPatch, explicit_cap: int | None
+    monkeypatch: pytest.MonkeyPatch,
+    explicit_cap: int | None,
+    graph_config_kind: str,
 ) -> None:
     """Decode-only graph overrides must not lower the full-prefill request cap."""
     monkeypatch.setattr(engine_builder.current_platform, "is_cuda", lambda: True)
     builder = make_moss_engine_builder()
-    graph_config = {"decode": {"max_padding_factor": 2}}
+    graph_config = {"decode": {"max_bs": 4}}
     if explicit_cap is not None:
         graph_config["prefill"] = {"full_prefill_max_req": explicit_cap}
     else:
         pass
     overrides = build_generation_batch_overrides(
-        server_args_overrides={"cuda_graph_config": graph_config},
+        server_args_overrides={
+            "cuda_graph_config": (
+                CudaGraphConfig.from_dict(graph_config)
+                if graph_config_kind == "native"
+                else graph_config
+            )
+        },
         **builder.generation_defaults(dtype="bfloat16"),
     )
     builder.adjust_overrides(overrides)
@@ -555,6 +565,20 @@ def test_partial_graph_override_preserves_prefill_capacity(
         16 if explicit_cap is None else explicit_cap
     )
     assert overrides["cuda_graph_config"]["decode"] == graph_config["decode"]
+
+
+@pytest.mark.parametrize("graph_config", [None, {"prefill": None}])
+def test_empty_graph_override_preserves_prefill_capacity(
+    monkeypatch: pytest.MonkeyPatch, graph_config: dict | None
+) -> None:
+    monkeypatch.setattr(engine_builder.current_platform, "is_cuda", lambda: True)
+    builder = make_moss_engine_builder()
+    overrides = build_generation_batch_overrides(
+        server_args_overrides={"cuda_graph_config": graph_config},
+        **builder.generation_defaults(dtype="bfloat16"),
+    )
+    builder.adjust_overrides(overrides)
+    assert overrides["cuda_graph_config"]["prefill"]["full_prefill_max_req"] == 16
 
 
 @pytest.mark.parametrize(

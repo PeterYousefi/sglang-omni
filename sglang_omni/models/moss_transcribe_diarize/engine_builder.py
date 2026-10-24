@@ -25,6 +25,7 @@ from sglang_omni.scheduling.engine_factory import (
 )
 from sglang_omni.scheduling.generation_batch_policy import (
     CudaGraphBackend,
+    CudaGraphConfig,
     build_default_prefill_cuda_graph_bs,
     get_prefill_cuda_graph_backend,
 )
@@ -176,8 +177,12 @@ class MossTranscribeDiarizeEngineBuilder(
             pass
 
         if current_platform.is_cuda():
-            graph_config = overrides.get("cuda_graph_config", {})
-            prefill_config = graph_config.get("prefill", {})
+            graph_config = overrides.get("cuda_graph_config") or {}
+            if isinstance(graph_config, CudaGraphConfig):
+                graph_config = graph_config.to_dict()
+            else:
+                pass
+            prefill_config = graph_config.get("prefill") or {}
             overrides["cuda_graph_config"] = {
                 **graph_config,
                 "prefill": {
