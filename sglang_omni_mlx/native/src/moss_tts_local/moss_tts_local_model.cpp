@@ -101,47 +101,36 @@ mx::array KeepTopP(const mx::array &logits, double top_p) {
                    NegativeInfinity(logits.dtype()), logits);
 }
 
-// Note (Jiaxin Deng): the repetition penalty of the mlx-audio port: each
-// earlier code's logit is divided by the penalty when positive, multiplied
-// when not.
+// Note (Jiaxin Deng): the repetition penalty of the mlx-audio port: the logit
+// of each code seen earlier, seen_codes [vocabulary] true, is divided by the
+// penalty when positive and multiplied by it when not.
 mx::array PenalizeRepeats(const mx::array &logits,
-                          const std::vector<mx::array> &previous_codes,
+                          const std::optional<mx::array> &seen_codes,
                           double penalty) {
-  if (previous_codes.empty() || penalty == 1.0) {
+  if (!seen_codes.has_value() || penalty == 1.0) {
     return logits;
   } else {
   }
-  const int vocabulary = logits.shape(-1);
-  mx::array previous =
-      mx::astype(mx::concatenate(previous_codes, 0), mx::int32);
-  previous =
-      mx::where(mx::less(previous, mx::array(0)), mx::array(0), previous);
-  previous = mx::where(mx::greater_equal(previous, mx::array(vocabulary)),
-                       mx::array(0), previous);
-  const mx::array seen = mx::any(
-      mx::take(mx::eye(vocabulary, mx::bool_), mx::reshape(previous, {-1}), 0),
-      0);
   const mx::Dtype dtype = logits.dtype();
   const mx::array penalized = mx::where(
       mx::greater(logits, mx::array(0.0f, dtype)),
       mx::divide(logits, mx::array(static_cast<float>(penalty), dtype)),
       mx::multiply(logits, mx::array(static_cast<float>(penalty), dtype)));
-  return mx::where(mx::expand_dims(seen, 0), penalized, logits);
+  return mx::where(mx::expand_dims(*seen_codes, 0), penalized, logits);
 }
 
 // One sampled index [1] from logits [1, vocabulary], drawing on MLX's global
 // random state as the reference sampler does.
 mx::array SampleIndex(const mx::array &logits,
                       const SamplingParameters &parameters, int top_k,
-                      const std::vector<mx::array> &previous_codes) {
+                      const std::optional<mx::array> &seen_codes) {
   const bool sampled = parameters.temperature > 0;
   mx::array scores =
       sampled ? mx::divide(logits,
                            mx::array(static_cast<float>(parameters.temperature),
                                      logits.dtype()))
               : logits;
-  scores =
-      PenalizeRepeats(scores, previous_codes, parameters.repetition_penalty);
+  scores = PenalizeRepeats(scores, seen_codes, parameters.repetition_penalty);
   if (!sampled) {
     return mx::astype(mx::argmax(scores, -1), mx::int32);
   } else {
@@ -418,9 +407,8 @@ qwen3_asr::FinishReason MossTtsLocalModel::Generate(
   mx::random::seed(parameters.seed);
   const mx::array candidates =
       mx::array({audio_assistant_slot_id_, audio_end_id_});
-  const std::vector<mx::array> no_history;
-  // Each codebook's codes so far, [1, 1] per frame, for the penalty.
-  std::vector<std::vector<mx::array>> history(codebook_count_);
+  // Which codes each codebook has produced so far, for the penalty.
+  std::vector<std::optional<mx::array>> seen_codes(codebook_count_);
   std::vector<qwen3_asr::KVCache> caches = backbone_.NewCaches();
   mx::array rows =
       mx::array(flat.begin(),
@@ -445,7 +433,7 @@ qwen3_asr::FinishReason MossTtsLocalModel::Generate(
         candidates,
         SampleIndex(checkpoint_.Linear(local_hidden, "local_text_lm_head"),
                     parameters.text, std::min(parameters.text.top_k, 2),
-                    no_history),
+                    std::nullopt),
         0);
     mx::eval(decision);
     if (decision.item<int32_t>() != audio_assistant_slot_id_) {
@@ -457,7 +445,7 @@ qwen3_asr::FinishReason MossTtsLocalModel::Generate(
       const mx::array code = SampleIndex(
           checkpoint_.Linear(local_hidden,
                              "audio_lm_heads." + std::to_string(codebook)),
-          parameters.audio, parameters.audio.top_k, history[codebook]);
+          parameters.audio, parameters.audio.top_k, seen_codes[codebook]);
       codes.push_back(code);
       if (codebook + 1 < codebook_count_) {
         local_inputs = mx::concatenate(
@@ -472,13 +460,24 @@ qwen3_asr::FinishReason MossTtsLocalModel::Generate(
       }
     }
     const mx::array frame_codes = mx::concatenate(codes, 0);
-    mx::eval(frame_codes);
+    std::vector<mx::array> evaluated = {frame_codes};
     if (parameters.audio.repetition_penalty != 1.0) {
       for (int codebook = 0; codebook < codebook_count_; ++codebook) {
-        history[codebook].push_back(mx::reshape(codes[codebook], {1, 1}));
+        const mx::array produced = mx::equal(
+            mx::arange(checkpoint_
+                           .Weight("audio_lm_heads." +
+                                   std::to_string(codebook) + ".weight")
+                           .shape(0)),
+            codes[codebook]);
+        seen_codes[codebook] =
+            seen_codes[codebook].has_value()
+                ? mx::logical_or(*seen_codes[codebook], produced)
+                : produced;
+        evaluated.push_back(*seen_codes[codebook]);
       }
     } else {
     }
+    mx::eval(evaluated);
     rows = mx::reshape(
         mx::concatenate({mx::array({audio_assistant_slot_id_}), frame_codes},
                         0),
