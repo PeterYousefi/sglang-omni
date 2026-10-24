@@ -102,7 +102,7 @@ int main(int argc, char **argv) {
   const double load_seconds = SecondsSince(load_started);
   mlx::core::reset_peak_memory();
   if (seed.has_value()) {
-    // Note (Jiaxin Deng): MLX's default key sequence is per thread; this
+    // Note (Minyi Tang): MLX's default key sequence is per thread; this
     // seeds the thread that generates.
     mlx::core::random::seed(*seed);
   } else {

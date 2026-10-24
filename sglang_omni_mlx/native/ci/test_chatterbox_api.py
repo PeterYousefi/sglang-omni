@@ -35,8 +35,8 @@ SENTENCE = "Please remember to bring your passport and boarding pass to the airp
 # Note (Jiaxin Deng): one T3 pass speaks about 10 s (250 tokens) of any longer
 # text, which takes seconds to generate.
 PASSAGE = " ".join([SENTENCE] * 6)
-# Note (Jiaxin Deng): generation samples tokens, so the audio differs between
-# seeds; the transcript may miss one word without the speech being wrong.
+# Note (Minyi Tang): generation samples noise, so the audio differs on every
+# request; the transcript may miss one word without the speech being wrong.
 MAX_WORD_ERRORS = 1
 MAX_QUEUED_REQUESTS = 1
 REQUEST_TIMEOUT_SECONDS = 20

@@ -500,9 +500,10 @@ std::string NewRequestId() {
 // address and port since civetweb does not expose it, or -1.
 int ClientSocket(const mg_connection *connection) {
   const mg_request_info *request_info = mg_get_request_info(connection);
-  // Note (Jiaxin Deng): a listing that fails, as it does in a process out of
+  // Note (Minyi Tang): a listing that fails, as it does in a process out of
   // descriptors, ends the search, and the request is then served without
-  // watching its client; nothing here throws through civetweb's C callback.
+  // watching its client. Nothing here throws, since an exception would unwind
+  // through civetweb's C callback and terminate the server.
   std::error_code listing_error;
   for (std::filesystem::directory_iterator listing("/dev/fd", listing_error);
        !listing_error && listing != std::filesystem::directory_iterator();
@@ -542,7 +543,13 @@ int ClientSocket(const mg_connection *connection) {
 }
 
 // Whether the client of client_socket closed it, which its socket shows by
-// reading as ended or failing; what it sent after its request is dropped.
+// reading as ended or failing.
+// Note (Minyi Tang): civetweb keeps no connection alive, so it never serves
+// what a client sends after its request; that is read and dropped here, since
+// bytes left unread would hide the end of the socket from every later check.
+// Note (Minyi Tang): a client that only shuts down its sending side also reads
+// as ended and is treated as gone, as uvicorn treats it for the CUDA server.
+// TCP tells the two apart only once something is written to the socket.
 bool ClientLeft(int client_socket) {
   if (client_socket < 0) {
     return false;
@@ -586,7 +593,7 @@ void LogFailure(std::exception_ptr error) {
     std::rethrow_exception(error);
   } catch (const qwen3_asr::TranscriptionCancelled &) {
   } catch (const std::exception &failure) {
-    // Note (Jiaxin Deng): only the exception type is logged, never the text.
+    // Note (Minyi Tang): only the exception type is logged, never the text.
     std::cerr << "speech generation failed: " << typeid(failure).name() << "\n";
   }
 }
@@ -607,6 +614,9 @@ public:
     throw std::logic_error("chatterbox serves no transcriptions");
   }
   bool Transcribes() const override { return false; }
+  // Note (Minyi Tang): /health counts the slots admission holds, which the
+  // worker frees only after it marks a request done; once /health shows the
+  // server idle, it admits a full queue.
   std::map<std::string, int>
   RequestStates(const qwen3_asr::TranscriptionWorker &) const override {
     std::lock_guard<std::mutex> lock(admission_mutex_);
@@ -685,8 +695,8 @@ private:
         cancel,
         [this, channel](std::optional<TranscriptionResult> result,
                         std::exception_ptr error) {
-          // Note (Jiaxin Deng): the slot frees before the response can end,
-          // so a client's next request is never refused for its previous one.
+          // Note (Minyi Tang): the slot frees before the response can end, so
+          // a client's next request is never refused for its previous one.
           {
             std::lock_guard<std::mutex> lock(admission_mutex_);
             --admitted_requests_;
@@ -733,7 +743,7 @@ private:
     } else {
     }
     if (timed_out) {
-      // Note (Jiaxin Deng): a request still queued is dropped once the
+      // Note (Minyi Tang): a request still queued is dropped once the
       // worker reaches it.
       cancel->store(true);
       std::cerr << "speech generation timed out\n";
