@@ -128,13 +128,15 @@ class PromptConditioning(TypedDict):
 
 
 class SpeakerEncoder(Protocol):
-    def __call__(self, reference_audio: bytes | str) -> torch.Tensor: ...
+    def __call__(self, reference_audio: bytes | str) -> torch.Tensor:
+        pass
 
 
 class PromptLatentEncoder(Protocol):
     def __call__(
         self, reference_audio: bytes | str, seed: int | None
-    ) -> PromptConditioning: ...
+    ) -> PromptConditioning:
+        pass
 
 
 class SpeakerEmbeddingHook(
