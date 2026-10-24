@@ -230,3 +230,20 @@ set_target_properties(voxtral_tts_server voxtral_tts_synthesize PROPERTIES
   BUILD_RPATH "${MLX_LIBRARY_DIRS};@loader_path"
   INSTALL_RPATH "@loader_path")
 install(TARGETS voxtral_tts_server voxtral_tts_synthesize RUNTIME DESTINATION bin)
+
+# Note (Jiaxin Deng): MOSS-TTS-Local v1.5: moss_tts_local_server, with the CUDA
+# server's /v1/audio/speech API, and its parity tool; the backbone reuses
+# Qwen3's decoder.
+add_library(moss_tts_local STATIC src/moss_tts_local/moss_tts_local_codec.cpp
+  src/moss_tts_local/moss_tts_local_model.cpp)
+target_link_libraries(moss_tts_local PUBLIC qwen3_asr)
+target_compile_options(moss_tts_local PRIVATE -Wall -Wextra -ffp-contract=off)
+add_executable(moss_tts_local_server src/moss_tts_local/moss_tts_local_server.cpp)
+target_link_libraries(moss_tts_local_server PRIVATE moss_tts_local asr_service)
+target_compile_options(moss_tts_local_server PRIVATE -Wall -Wextra)
+add_executable(moss_tts_local_synthesize tools/moss_tts_local_synthesize.cpp)
+target_link_libraries(moss_tts_local_synthesize PRIVATE moss_tts_local)
+set_target_properties(moss_tts_local_server moss_tts_local_synthesize PROPERTIES
+  BUILD_RPATH "${MLX_LIBRARY_DIRS};@loader_path"
+  INSTALL_RPATH "@loader_path")
+install(TARGETS moss_tts_local_server moss_tts_local_synthesize RUNTIME DESTINATION bin)
