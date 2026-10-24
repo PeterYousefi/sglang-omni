@@ -615,26 +615,28 @@
 </div>
 <section id="native-full-duplex-minicpm-o">
 <h2>Native Full Duplex: MiniCPM-o<a class="headerlink" href="#native-full-duplex-minicpm-o" title="Link to this heading">#</a></h2>
-<p><a class="reference external" href="https://huggingface.co/openbmb/MiniCPM-o-4_5">MiniCPM-o 4.5</a> is served for full duplex with its own config; <a class="reference internal" href="../cookbook/minicpm_o.html"><span class="std std-doc">MiniCPM-o</span></a> covers its installation and chat usage.</p>
+<p><a class="reference external" href="https://huggingface.co/openbmb/MiniCPM-o-4_5">MiniCPM-o 4.5</a> is served for full duplex with its <code class="docutils literal notranslate"><span class="pre">session</span></code> variant; <a class="reference internal" href="../cookbook/minicpm_o.html"><span class="std std-doc">MiniCPM-o</span></a> covers its installation and chat usage.</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>-m<span class="w"> </span>sglang_omni.cli<span class="w"> </span>serve<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--config<span class="w"> </span>examples/full_duplex/minicpmo.yaml<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--model-path<span class="w"> </span>openbmb/MiniCPM-o-4_5<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--model-path<span class="w"> </span>openbmb/MiniCPM-o-4_5<span class="w"> </span>--variant<span class="w"> </span>session<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--enable-realtime<span class="w"> </span>--port<span class="w"> </span><span class="m">8000</span>
 </pre></div>
 </div>
-<p>We provide two demonstrative config files.</p>
+<p><code class="docutils literal notranslate"><span class="pre">--variant</span> <span class="pre">session</span></code> selects the full-duplex pipeline, which <code class="docutils literal notranslate"><span class="pre">serve</span></code> refuses to start without <code class="docutils literal notranslate"><span class="pre">--enable-realtime</span></code>. Every setting below is changed with a flag of the same name, for example <code class="docutils literal notranslate"><span class="pre">--max_sessions</span> <span class="pre">4</span></code>, and <code class="docutils literal notranslate"><span class="pre">config</span> <span class="pre">resolve</span></code> with the same arguments prints the whole configuration:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>sgl-omni<span class="w"> </span>config<span class="w"> </span>resolve<span class="w"> </span>--model-path<span class="w"> </span>openbmb/MiniCPM-o-4_5<span class="w"> </span>--variant<span class="w"> </span>session
+</pre></div>
+</div>
 <div class="pst-scrollable-table-container"><table class="table">
 <thead>
-<tr class="row-odd"><th class="head"><p>Config</p></th>
-<th class="head"><p>Use it for</p></th>
+<tr class="row-odd"><th class="head"><p>Serving</p></th>
+<th class="head"><p>Flags</p></th>
 </tr>
 </thead>
 <tbody>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">examples/full_duplex/minicpmo.yaml</span></code></p></td>
-<td><p>Normal serving. Sampling matches the MiniCPM-o demo</p></td>
+<tr class="row-even"><td><p>Normal</p></td>
+<td><p>None. The defaults match the MiniCPM-o demo</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">examples/full_duplex/minicpmo-parity.yaml</span></code></p></td>
-<td><p>Repeatable output for regression and parity recordings. Differs in greedy sampling, <code class="docutils literal notranslate"><span class="pre">top_k:</span> <span class="pre">100</span></code>, and running the thinker and talker without CUDA graphs</p></td>
+<tr class="row-odd"><td><p>Repeatable output for regression and parity recordings</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">--sampling.greedy</span> <span class="pre">true</span> <span class="pre">--sampling.top_k</span> <span class="pre">100</span> <span class="pre">--thinker.engine.disable_cuda_graph</span> <span class="pre">true</span> <span class="pre">--talker.engine.disable_cuda_graph</span> <span class="pre">true</span></code>: greedy sampling, <code class="docutils literal notranslate"><span class="pre">top_k</span></code> 100, and the thinker and talker without CUDA graphs</p></td>
 </tr>
 </tbody>
 </table>
@@ -676,12 +678,12 @@
 <td><p>Compiles every decode graph batch size; adds minutes to startup</p></td>
 </tr>
 <tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">sampling</span></code></p></td>
-<td><p>see the config</p></td>
-<td><p>Default sampling when a session does not set its own</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">MiniCPMODuplexSampling</span></code> in <code class="docutils literal notranslate"><span class="pre">sglang_omni/models/minicpm_o/native_config.py</span></code></p></td>
+<td><p>Default sampling when a session does not set its own; <code class="docutils literal notranslate"><span class="pre">--sampling.&lt;field&gt;</span></code> changes one, such as <code class="docutils literal notranslate"><span class="pre">--sampling.temperature</span> <span class="pre">0.5</span></code></p></td>
 </tr>
 <tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">vision</span></code></p></td>
-<td><p>see the config</p></td>
-<td><p>Camera-frame limits per unit (1 s of audio)</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">MiniCPMODuplexVision</span></code> in the same file</p></td>
+<td><p>Camera-frame limits per unit (1 s of audio); <code class="docutils literal notranslate"><span class="pre">--vision.&lt;field&gt;</span></code> changes one, such as <code class="docutils literal notranslate"><span class="pre">--vision.max_frames_per_unit</span> <span class="pre">2</span></code></p></td>
 </tr>
 </tbody>
 </table>
@@ -732,7 +734,7 @@
 </tr>
 <tr class="row-odd"><td><p>Sampling</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">sampling</span></code></p></td>
-<td><p>For example <code class="docutils literal notranslate"><span class="pre">temperature</span></code>, <code class="docutils literal notranslate"><span class="pre">top_p</span></code> and <code class="docutils literal notranslate"><span class="pre">listen_prob_scale</span></code>; unset fields keep the defaults in <code class="docutils literal notranslate"><span class="pre">examples/full_duplex/minicpmo.yaml</span></code></p></td>
+<td><p>For example <code class="docutils literal notranslate"><span class="pre">temperature</span></code>, <code class="docutils literal notranslate"><span class="pre">top_p</span></code> and <code class="docutils literal notranslate"><span class="pre">listen_prob_scale</span></code>; unset fields keep the server’s defaults (<code class="docutils literal notranslate"><span class="pre">sampling</span></code> above)</p></td>
 </tr>
 <tr class="row-even"><td><p>Image detail</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">max_slice_nums</span></code></p></td>
