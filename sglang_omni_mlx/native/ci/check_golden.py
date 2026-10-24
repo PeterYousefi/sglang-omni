@@ -339,7 +339,9 @@ def run(transcribe_corpus: TranscribeCorpus) -> None:
         return
     else:
         pass
-    if golden.get("kind") in ("voxtral_tts", "fish_s2_pro"):
+    if golden.get("kind") == "fish_s2_pro":
+        report(*fish_s2_pro_golden.check(golden, device, results))
+    elif golden.get("kind") == "voxtral_tts":
         report(*voxtral_golden.check(golden, device, results))
     else:
         report(*check(golden, device, results, metrics))
