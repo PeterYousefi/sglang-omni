@@ -8,13 +8,19 @@ import glob
 import inspect
 import os
 import textwrap
+from types import SimpleNamespace
 
 import pytest
 import torch
+from sglang.srt.managers.schedule_batch import Modality, MultimodalDataItem
 from sglang.srt.models.whisper import WhisperEncoder
 
 from sglang_omni.models.moss_transcribe_diarize.encoder_cuda_graph import (
     WhisperEncoderCudaGraphRunner,
+)
+from sglang_omni.models.moss_transcribe_diarize.sglang_model import (
+    MossTranscribeDiarizeForConditionalGeneration,
+    VQAdaptor,
 )
 from sglang_omni.models.moss_transcribe_diarize.whisper_encoder import (
     PackedWhisperEncoder,
@@ -331,7 +337,7 @@ def test_packed_encoder_graph_matches_loaded_bf16_encoder(
     encoder_bundle: tuple[WhisperEncoder, int, WhisperEncoderCudaGraphRunner]
 ) -> None:
     """Packed projections must preserve the loaded encoder's BF16 graph output."""
-    encoder, num_mel_bins, reference_runner = encoder_bundle
+    encoder, num_mel_bins, _ = encoder_bundle
     runner = WhisperEncoderCudaGraphRunner(
         PackedWhisperEncoder(encoder),
         num_mel_bins,
@@ -340,8 +346,60 @@ def test_packed_encoder_graph_matches_loaded_bf16_encoder(
     )
     runner.capture([1, 2])
     torch.manual_seed(415)
-    for chunk_count in [1, 2]:
+    for chunk_count in [1, 2, 9]:
         features = make_feat(num_mel_bins, chunk_count)
-        expected = reference_runner.run(features, make_pos(), None)
-        actual = runner.run(features, make_pos(), None)
+        with current_platform.graph_capture_attention(), torch.no_grad():
+            expected = encoder(features, make_pos(), None)
+            actual = runner.run(features, make_pos(), None)
         torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+
+
+@pytest.mark.skipif(
+    not HAS_DEVICE_GRAPH or DEVICE.type != "cuda", reason="needs CUDA graphs"
+)
+def test_production_audio_embeddings_survive_next_encoder_replay(
+    encoder_bundle: tuple[WhisperEncoder, int, WhisperEncoderCudaGraphRunner],
+) -> None:
+    """A later replay must not overwrite embeddings retained by the production consumer."""
+    encoder, num_mel_bins, _ = encoder_bundle
+    runner = WhisperEncoderCudaGraphRunner(
+        PackedWhisperEncoder(encoder),
+        num_mel_bins,
+        INPUT_FEATURE_LEN,
+        graph_backend=GRAPH_BACKEND,
+    )
+    runner.capture([2])
+    torch.manual_seed(417)
+    features = make_feat(num_mel_bins, 2).cpu()
+    with current_platform.graph_capture_attention(), torch.no_grad():
+        encoded = encoder(features.to(DEVICE), make_pos(), None)
+    model = MossTranscribeDiarizeForConditionalGeneration.__new__(
+        MossTranscribeDiarizeForConditionalGeneration
+    )
+    torch.nn.Module.__init__(model)
+    model.config = SimpleNamespace(audio_merge_size=2)
+    model.whisper_encoder = encoder
+    model.vq_adaptor = (
+        VQAdaptor(encoded.shape[-1] * 2, 8)
+        .to(device=DEVICE, dtype=torch.bfloat16)
+        .eval()
+    )
+    model.compiled_encoder = None
+    model.encoder_graph_runner = None
+    audio_item = MultimodalDataItem(
+        modality=Modality.AUDIO,
+        feature=features,
+        model_specific_data={
+            "audio_feature_lengths": torch.tensor([37, 49]),
+            "audio_chunk_mapping": torch.tensor([0, 1]),
+        },
+    )
+    with current_platform.graph_capture_attention(), torch.no_grad():
+        expected = model.get_audio_feature_uncached([audio_item], None)
+        model.encoder_graph_runner = runner
+        actual = model.get_audio_feature_uncached([audio_item], None)
+        audio_item.feature = torch.zeros_like(features)
+        following = model.get_audio_feature_uncached([audio_item], None)
+    DEVICE_MODULE.synchronize()
+    torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+    assert not torch.equal(actual, following)

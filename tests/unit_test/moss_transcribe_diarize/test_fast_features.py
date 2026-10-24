@@ -1,11 +1,18 @@
 # SPDX-License-Identifier: Apache-2.0
 """Single-window log-mel boundaries and reference fallback."""
 
+from types import SimpleNamespace
+
 import numpy as np
 import pytest
+import torch
 from transformers import WhisperFeatureExtractor
 
 from sglang_omni.models.moss_transcribe_diarize.fast_features import TrimmedWhisperFbank
+from sglang_omni.models.moss_transcribe_diarize.request_builders import (
+    extract_audio_features,
+    extract_audio_features_fast,
+)
 
 
 @pytest.fixture(scope="module", params=[80, 128])
@@ -65,3 +72,19 @@ def test_trimmed_fbank_rejects_dithered_extractor() -> None:
     """Silence-tail reconstruction cannot replace reference dither noise."""
     extractor = WhisperFeatureExtractor(feature_size=80, dither=0.001)
     assert TrimmedWhisperFbank.verified(extractor) is None
+
+
+@pytest.mark.parametrize("sample_count", [1, 400, 10041, 479601, 480000])
+def test_fast_features_match_production_extraction(
+    fast_fbank: TrimmedWhisperFbank, sample_count: int
+) -> None:
+    """Fast extraction must preserve production features, lengths, mapping and token count."""
+    processor = SimpleNamespace(
+        feature_extractor=fast_fbank.feature_extractor, audio_merge_size=2
+    )
+    audio = np.random.default_rng(415).standard_normal(sample_count).astype(np.float32)
+    expected = extract_audio_features(processor, audio)
+    actual = extract_audio_features_fast(processor, audio, fast_fbank)
+    for actual_tensor, expected_tensor in zip(actual[:3], expected[:3], strict=True):
+        torch.testing.assert_close(actual_tensor, expected_tensor, rtol=0, atol=0)
+    assert actual[3] == expected[3]

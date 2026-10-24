@@ -2182,7 +2182,7 @@ class OmniScheduler(Generic[RequestDataT]):
         iteration that submitted a build, which kept the scheduler asleep while
         decode had GPU work queued.
         """
-        if not self.waiting_queue or self.request_build_admission_wait_s == 0:
+        if not self.waiting_queue:
             return
         else:
             pass
@@ -2192,7 +2192,7 @@ class OmniScheduler(Generic[RequestDataT]):
                 for pending in self.pending_request_builds.values()
                 if not pending[2].done()
             ]
-        if build_futures:
+        if build_futures and self.request_build_admission_wait_s > 0:
             wait_futures(
                 build_futures,
                 timeout=self.request_build_admission_wait_s,

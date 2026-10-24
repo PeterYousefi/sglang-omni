@@ -140,6 +140,7 @@ class MossTranscribeDiarizeForConditionalGeneration(nn.Module):
         encoder = self.whisper_encoder
         can_pack = (
             current_platform.is_cuda()
+            and next(encoder.parameters()).dtype == torch.bfloat16
             and self.encoder_is_unquantized
             and all(
                 layer.self_attn.num_heads == layer.self_attn.total_num_heads

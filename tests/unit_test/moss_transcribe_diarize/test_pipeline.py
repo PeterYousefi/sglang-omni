@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 import httpx
@@ -9,7 +10,11 @@ import pytest
 import torch
 from huggingface_hub.errors import RepositoryNotFoundError
 
-from sglang_omni.models.moss_transcribe_diarize import engine_builder, stages
+from sglang_omni.models.moss_transcribe_diarize import (
+    engine_builder,
+    sglang_model,
+    stages,
+)
 from sglang_omni.models.moss_transcribe_diarize.config import (
     MossTranscribeDiarizePipelineConfig,
 )
@@ -527,3 +532,60 @@ def test_factory_preserves_trimmed_fbank_opt_out(
         "OpenMOSS-Team/MOSS-Transcribe-Diarize", enable_trimmed_fbank=False
     )
     assert adapters.call_args.kwargs["enable_trimmed_fbank"] is False
+
+
+@pytest.mark.parametrize("explicit_cap", [None, 7])
+def test_partial_graph_override_preserves_prefill_capacity(
+    monkeypatch: pytest.MonkeyPatch, explicit_cap: int | None
+) -> None:
+    """Decode-only graph overrides must not lower the full-prefill request cap."""
+    monkeypatch.setattr(engine_builder.current_platform, "is_cuda", lambda: True)
+    builder = make_moss_engine_builder()
+    graph_config = {"decode": {"max_padding_factor": 2}}
+    if explicit_cap is not None:
+        graph_config["prefill"] = {"full_prefill_max_req": explicit_cap}
+    else:
+        pass
+    overrides = build_generation_batch_overrides(
+        server_args_overrides={"cuda_graph_config": graph_config},
+        **builder.generation_defaults(dtype="bfloat16"),
+    )
+    builder.adjust_overrides(overrides)
+    assert overrides["cuda_graph_config"]["prefill"]["full_prefill_max_req"] == (
+        16 if explicit_cap is None else explicit_cap
+    )
+    assert overrides["cuda_graph_config"]["decode"] == graph_config["decode"]
+
+
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+def test_packed_encoder_is_restricted_to_verified_dtype(
+    monkeypatch: pytest.MonkeyPatch, dtype: torch.dtype
+) -> None:
+    """FP16 must retain the original encoder's per-layer overflow clamp."""
+    encoder = torch.nn.Linear(1, 1, dtype=dtype)
+    encoder.layers = [
+        SimpleNamespace(
+            self_attn=SimpleNamespace(num_heads=1, total_num_heads=1, head_dim=64)
+        )
+    ]
+    packed_encoder = Mock()
+    packed = Mock(return_value=packed_encoder)
+    runner = Mock()
+    monkeypatch.setattr(sglang_model.current_platform, "is_cuda", lambda: True)
+    monkeypatch.setattr(
+        sglang_model.current_platform, "get_device_graph_backend", lambda device: Mock()
+    )
+    monkeypatch.setattr(sglang_model, "PackedWhisperEncoder", packed)
+    monkeypatch.setattr(sglang_model, "WhisperEncoderCudaGraphRunner", runner)
+    model = SimpleNamespace(
+        whisper_encoder=encoder,
+        encoder_is_unquantized=True,
+        config=SimpleNamespace(audio_config=SimpleNamespace(num_mel_bins=80)),
+    )
+    sglang_model.MossTranscribeDiarizeForConditionalGeneration.init_encoder_graphs(
+        model, [1], 3000
+    )
+    assert runner.call_args.args[0] is (
+        packed_encoder if dtype == torch.bfloat16 else encoder
+    )
+    assert packed.call_count == int(dtype == torch.bfloat16)
