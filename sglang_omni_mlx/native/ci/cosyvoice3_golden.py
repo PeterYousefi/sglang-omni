@@ -9,7 +9,8 @@ A golden file of kind cosyvoice3 names its cases (text, optional instructions,
 seed and max_new_tokens; a cloning case also names a corpus clip as reference_clip,
 with its transcript as reference_text unless it is cross-lingual); each chip's
 outputs keep one string per speech token, so a divergence reads as the token it
-starts at. A cloning case's prompt ids also hold the reference's speech tokens.
+starts at. A cloning case's first code is the reference's speech tokens, which
+the GPU computes, so only a chip with golden outputs checks them.
 """
 
 from __future__ import annotations
@@ -53,12 +54,16 @@ def synthesize(runtime_bin: Path, data_root: Path, model: str, case: dict) -> di
             text=True,
         )
         tokens = json.loads(tokens_path.read_text())
-    reference = tokens["reference"] or {}
-    prompt_ids = tokens["text_ids"] + reference.get("speech_tokens", [])
+    reference = tokens["reference"]
+    reference_codes = (
+        ["reference " + " ".join(str(value) for value in reference["speech_tokens"])]
+        if reference
+        else []
+    )
     return {
-        "prompt_ids": " ".join(str(value) for value in prompt_ids),
+        "prompt_ids": " ".join(str(value) for value in tokens["text_ids"]),
         "finish_reason": json.loads(completed.stdout.splitlines()[-1])["finish_reason"],
-        "codes": [str(token) for token in tokens["speech_tokens"]],
+        "codes": reference_codes + [str(token) for token in tokens["speech_tokens"]],
     }
 
 

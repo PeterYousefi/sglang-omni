@@ -69,7 +69,13 @@ def reference_samples() -> tuple[np.ndarray, int]:
 
 
 def wav_bytes(
-    samples: np.ndarray, rate: int, sample_format: str = "pcm16", channels: int = 1
+    samples: np.ndarray,
+    rate: int,
+    sample_format: str = "pcm16",
+    channels: int = 1,
+    extensible: bool = False,
+    chunk_before_data: bytes = b"",
+    declared_data_bytes: int | None = None,
 ) -> bytes:
     """A WAV file of samples in one of the formats the server reads."""
     frames = np.repeat(samples[:, None], channels, axis=1)
@@ -83,21 +89,42 @@ def wav_bytes(
         values = np.clip(frames * 32768.0, -32768, 32767).astype("<i2")
         data, format_code, bits = values.tobytes(), 1, 16
     block = channels * bits // 8
-    header = (
-        b"RIFF"
-        + (36 + len(data)).to_bytes(4, "little")
-        + b"WAVEfmt "
-        + (16).to_bytes(4, "little")
-        + format_code.to_bytes(2, "little")
+    fmt = (
+        (0xFFFE if extensible else format_code).to_bytes(2, "little")
         + channels.to_bytes(2, "little")
         + rate.to_bytes(4, "little")
         + (rate * block).to_bytes(4, "little")
         + block.to_bytes(2, "little")
         + bits.to_bytes(2, "little")
-        + b"data"
-        + len(data).to_bytes(4, "little")
     )
-    return header + data
+    if extensible:
+        # cbSize, valid bits, channel mask, then the subformat GUID.
+        fmt += (
+            (22).to_bytes(2, "little")
+            + bits.to_bytes(2, "little")
+            + (0).to_bytes(4, "little")
+            + format_code.to_bytes(2, "little")
+            + bytes.fromhex("000000001000800000aa00389b71")
+        )
+    else:
+        pass
+    padded_chunk = chunk_before_data + b"\0" * (len(chunk_before_data) % 2)
+    extra = (
+        b"LIST" + len(chunk_before_data).to_bytes(4, "little") + padded_chunk
+        if chunk_before_data
+        else b""
+    )
+    size = len(data) if declared_data_bytes is None else declared_data_bytes
+    body = (
+        b"WAVEfmt "
+        + len(fmt).to_bytes(4, "little")
+        + fmt
+        + extra
+        + b"data"
+        + size.to_bytes(4, "little")
+        + data
+    )
+    return b"RIFF" + len(body).to_bytes(4, "little") + body
 
 
 def data_url(audio: bytes) -> str:
@@ -543,11 +570,14 @@ def test_cosyvoice3_clones_the_voice_of_ref_audio(
                 }
             ]
         },
-        # A path inside --allowed-local-media-path, as a file URL.
+        # A path inside --allowed-local-media-path, as a percent-encoded file
+        # URL naming the local host.
         lambda: {
             "references": [
                 {
-                    "audio_path": f"file://{clips_directory() / REFERENCE_CLIP}.wav",
+                    "audio_path": "file://localhost"
+                    + str(clips_directory() / REFERENCE_CLIP).replace("_", "%5F")
+                    + ".wav",
                     "text": REFERENCE_TEXT,
                 }
             ]
@@ -571,6 +601,54 @@ def test_cosyvoice3_takes_every_reference_form(
     assert status == 200
     heard = transcript_words(asr_server, pcm)
     assert word_errors(words(CLONED_SENTENCE), heard) <= MAX_WORD_ERRORS, heard
+
+
+@pytest.mark.parametrize(
+    "encoding",
+    [
+        {"sample_format": "float32", "channels": 2},
+        {"sample_format": "pcm24"},
+        {"extensible": True},
+        {"chunk_before_data": b"odd"},
+        {"declared_data_bytes": 0xFFFFFFFF},
+    ],
+)
+def test_cosyvoice3_decodes_reference_wav_encodings_alike(
+    cosyvoice3_server: Server, encoding: dict
+) -> None:
+    """Each encoding holds the same samples, so it must clone the same speech."""
+    samples, rate = reference_samples()
+    body = {
+        "input": "hi",
+        "ref_text": REFERENCE_TEXT,
+        "response_format": "pcm",
+        "seed": 3,
+        "max_new_tokens": 5,
+    }
+    baseline = speak(
+        cosyvoice3_server, {**body, "ref_audio": data_url(wav_bytes(samples, rate))}
+    )
+    encoded = speak(
+        cosyvoice3_server,
+        {**body, "ref_audio": data_url(wav_bytes(samples, rate, **encoding))},
+    )
+    assert baseline[0] == encoded[0] == 200
+    assert encoded[2] == baseline[2]
+
+
+def test_cosyvoice3_takes_ref_text_beside_references(cosyvoice3_server: Server) -> None:
+    """CUDA takes ref_text when references[0] has no text of its own."""
+    reference = {"data": reference_url().split(",", 1)[1]}
+    body = {"input": "hi", "response_format": "pcm", "max_new_tokens": 1}
+    _, with_text, _ = speak(
+        cosyvoice3_server,
+        {**body, "references": [reference], "ref_text": REFERENCE_TEXT},
+    )
+    _, without_text, _ = speak(cosyvoice3_server, {**body, "references": [reference]})
+    # With a transcript the reference's speech tokens join the LLM prompt.
+    assert (
+        int(with_text["X-Prompt-Tokens"]) > int(without_text["X-Prompt-Tokens"]) + 100
+    )
 
 
 @pytest.mark.parametrize(

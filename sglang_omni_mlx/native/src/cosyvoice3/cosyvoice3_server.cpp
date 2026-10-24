@@ -284,8 +284,33 @@ ReferenceBytes(const std::string &source,
         "data URL");
   } else {
   }
-  const std::string path =
-      source.rfind("file://", 0) == 0 ? source.substr(7) : source;
+  std::string path = source;
+  if (source.rfind("file://", 0) == 0) {
+    // Note (Jiaxin Deng): as CUDA's unquote(urlparse(url).path), with the
+    // local host named or left out.
+    std::string_view location = std::string_view(source).substr(7);
+    if (location.rfind("localhost/", 0) == 0) {
+      location.remove_prefix(9);
+    } else if (location.empty() || location.front() != '/') {
+      throw std::invalid_argument("reference audio file URLs must be local");
+    } else {
+    }
+    path.clear();
+    for (size_t i = 0; i < location.size(); ++i) {
+      if (location[i] == '%' && i + 2 < location.size() &&
+          std::isxdigit(static_cast<unsigned char>(location[i + 1])) &&
+          std::isxdigit(static_cast<unsigned char>(location[i + 2]))) {
+        int value = 0;
+        std::from_chars(location.data() + i + 1, location.data() + i + 3, value,
+                        16);
+        path.push_back(static_cast<char>(value));
+        i += 2;
+      } else {
+        path.push_back(location[i]);
+      }
+    }
+  } else {
+  }
   std::error_code error;
   const std::filesystem::path resolved =
       std::filesystem::weakly_canonical(path, error);
@@ -320,64 +345,85 @@ std::optional<std::string> OptionalText(const Json &object, const char *name,
   }
 }
 
-// The reference a request gives: its WAV bytes, if any, and its transcript.
+// body's field, or nullptr when it is missing or null; unlike FieldOr, it
+// does not copy a large value such as inline audio.
+const Json *FieldPointer(const Json &object, const char *name) {
+  const auto found = object.find(name);
+  return found == object.end() || found->is_null() ? nullptr : &*found;
+}
+
+// Where a request's reference audio is: a data URL, path or file URL, or
+// base64 WAV bytes; text points into the request body.
+struct ReferenceSource {
+  const std::string *text = nullptr;
+  bool is_base64 = false;
+};
+
+// The WAV bytes a reference source holds.
+std::string
+SourceBytes(const ReferenceSource &source,
+            const std::optional<std::filesystem::path> &allowed_directory) {
+  return source.is_base64 ? Base64Bytes(*source.text)
+                          : ReferenceBytes(*source.text, allowed_directory);
+}
+
+// The reference a request gives, its audio's source if any, and its
+// transcript.
 // Note (Jiaxin Deng): the CUDA server's fields: ref_audio with ref_text, or
 // one references item, whose audio_path, ref_audio, audio or data holds the
-// audio and whose text is its transcript.
-std::pair<std::optional<std::string>, std::optional<std::string>>
-RequestReference(
-    const Json &body,
-    const std::optional<std::filesystem::path> &allowed_directory) {
-  const Json references = FieldOr(body, "references", Json::array());
-  const Json ref_audio = FieldOr(body, "ref_audio", Json(""));
-  if (!references.is_array()) {
+// audio and whose text is its transcript, else ref_text.
+std::pair<std::optional<ReferenceSource>, std::optional<std::string>>
+RequestReference(const Json &body) {
+  const Json *references = FieldPointer(body, "references");
+  const Json *ref_audio = FieldPointer(body, "ref_audio");
+  if (references != nullptr && !references->is_array()) {
     throw std::invalid_argument("references must be a list");
-  } else if (!ref_audio.is_string()) {
+  } else if (ref_audio != nullptr && !ref_audio->is_string()) {
     throw std::invalid_argument("ref_audio must be a string");
-  } else if (references.size() > 1) {
+  } else if (references != nullptr && references->size() > 1) {
     throw std::invalid_argument("Fun-CosyVoice3 accepts exactly one reference");
-  } else if (!references.empty() && ref_audio != "") {
+  } else {
+  }
+  const bool has_ref_audio = ref_audio != nullptr &&
+                             !ref_audio->get_ref<const std::string &>().empty();
+  const bool has_references = references != nullptr && !references->empty();
+  const std::optional<std::string> ref_text =
+      OptionalText(body, "ref_text", "ref_text");
+  if (has_references && has_ref_audio) {
     throw std::invalid_argument("give references or ref_audio, not both");
+  } else if (!has_references) {
+    return {has_ref_audio ? std::optional<ReferenceSource>(ReferenceSource{
+                                &ref_audio->get_ref<const std::string &>()})
+                          : std::nullopt,
+            ref_text};
   } else {
   }
-  if (references.empty()) {
-    const std::optional<std::string> text =
-        OptionalText(body, "ref_text", "ref_text");
-    if (ref_audio == "") {
-      return {std::nullopt, text};
-    } else {
-      return {ReferenceBytes(ref_audio.get<std::string>(), allowed_directory),
-              text};
-    }
-  } else {
-  }
-  const Json &reference = references.front();
+  const Json &reference = references->front();
   if (!reference.is_object()) {
     throw std::invalid_argument("Fun-CosyVoice3 references must be objects");
-  } else if (!FieldOr(reference, "vq_codes", Json()).is_null()) {
+  } else if (FieldPointer(reference, "vq_codes") != nullptr) {
     throw std::invalid_argument(
         "Fun-CosyVoice3 does not take vq_codes; give reference audio");
-  } else if (!FieldOr(body, "ref_text", Json()).is_null()) {
-    throw std::invalid_argument(
-        "give the transcript as references[0].text, not ref_text");
   } else {
   }
-  const std::optional<std::string> text =
+  const std::optional<std::string> reference_text =
       OptionalText(reference, "text", "references[0].text");
+  const std::optional<std::string> text =
+      reference_text.has_value() ? reference_text : ref_text;
   for (const char *field : {"audio_path", "ref_audio", "audio"}) {
-    const Json source = FieldOr(reference, field, Json(""));
-    if (!source.is_string()) {
+    const Json *source = FieldPointer(reference, field);
+    if (source != nullptr && !source->is_string()) {
       throw std::invalid_argument(std::string("references[0].") + field +
                                   " must be a string");
-    } else if (source != "") {
-      return {ReferenceBytes(source.get<std::string>(), allowed_directory),
-              text};
+    } else if (source != nullptr &&
+               !source->get_ref<const std::string &>().empty()) {
+      return {ReferenceSource{&source->get_ref<const std::string &>()}, text};
     } else {
     }
   }
-  const Json data = FieldOr(reference, "data", Json());
+  const Json *data = FieldPointer(reference, "data");
   const Json media_type = FieldOr(reference, "media_type", Json("audio/wav"));
-  if (!data.is_string()) {
+  if (data == nullptr || !data->is_string()) {
     throw std::invalid_argument("references[0] has no audio");
   } else if (!media_type.is_string() ||
              (media_type != "audio/wav" && media_type != "audio/x-wav" &&
@@ -385,7 +431,7 @@ RequestReference(
     throw std::invalid_argument("reference audio must be a WAV file");
   } else {
   }
-  return {Base64Bytes(data.get<std::string>()), text};
+  return {ReferenceSource{&data->get_ref<const std::string &>(), true}, text};
 }
 
 // A number field within [low, high], or fallback when it is missing or null.
@@ -403,9 +449,10 @@ float NumberField(const Json &body, const char *name, float fallback,
   return value.get<float>();
 }
 
-SpeechRequest
-ParseRequest(const Json &body,
-             const std::optional<std::filesystem::path> &allowed_directory) {
+// The request body's fields; the reference audio is only located, and
+// decoded once the request is admitted.
+SpeechRequest ParseRequest(const Json &body,
+                           std::optional<ReferenceSource> &reference_source) {
   if (!body.is_object()) {
     throw std::invalid_argument("speech request body must be a JSON object");
   } else {
@@ -441,18 +488,14 @@ ParseRequest(const Json &body,
     throw std::invalid_argument("instructions must be a string");
   } else {
   }
-  const auto [reference_bytes, reference_text] =
-      RequestReference(body, allowed_directory);
+  const auto [source, reference_text] = RequestReference(body);
   if (reference_text.has_value() && request.text.instructions.has_value()) {
     throw std::invalid_argument(
         "Fun-CosyVoice3 accepts either ref_text or instructions, not both");
   } else {
   }
   request.text.reference_text = reference_text;
-  if (reference_bytes.has_value()) {
-    request.reference_audio = cosyvoice3::ReadReferenceAudio(*reference_bytes);
-  } else {
-  }
+  reference_source = source;
   const Json language = FieldOr(body, "language", Json());
   if (!language.is_null() && !language.is_string()) {
     throw std::invalid_argument("language must be a string");
@@ -746,8 +789,9 @@ private:
     } else {
     }
     SpeechRequest request;
+    std::optional<ReferenceSource> reference_source;
     try {
-      request = ParseRequest(body, allowed_directory_);
+      request = ParseRequest(body, reference_source);
     } catch (const std::invalid_argument &error) {
       return omni_server::BadRequest(connection, error.what());
     }
@@ -779,6 +823,22 @@ private:
     if (!admitted) {
       return omni_server::WriteJson(connection, 503,
                                     {{"detail", "The request queue is full."}});
+    } else {
+    }
+    // Note (Jiaxin Deng): reference audio is read and resampled only once the
+    // request holds a slot, so a burst of large references cannot hold more
+    // than the queue allows; bad audio frees the slot again.
+    if (reference_source.has_value()) {
+      try {
+        request.reference_audio = cosyvoice3::ReadReferenceAudio(
+            SourceBytes(*reference_source, allowed_directory_));
+      } catch (const std::invalid_argument &error) {
+        {
+          std::lock_guard<std::mutex> lock(admission_mutex_);
+          --admitted_requests_;
+        }
+        return omni_server::BadRequest(connection, error.what());
+      }
     } else {
     }
 
