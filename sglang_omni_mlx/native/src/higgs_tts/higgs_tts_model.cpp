@@ -214,7 +214,7 @@ qwen3_asr::FinishReason HiggsTtsModel::Generate(
         mx::array(codes.begin(), {kCodebookCount}, mx::int32);
     if (!done && row + 1 < max_rows) {
       hidden = LastHidden(EmbedRow(row_codes), caches);
-      // Note (Jiaxin Deng): the decoder steps on the GPU while on_row
+      // Note (Minyi Tang): the decoder steps on the GPU while on_row
       // handles this row.
       mx::async_eval(hidden);
     } else {

@@ -40,9 +40,8 @@ LONG_SENTENCE = " ".join([SENTENCE] * 8)
 # Note (Jiaxin Deng): the model ends this passage early, after about 340 rows
 # (13 s on an M5), which still outlasts SHORT_REQUEST_TIMEOUT_SECONDS.
 PASSAGE = " ".join([SENTENCE] * 50)
-# Note (Jiaxin Deng): generation samples codes, so the audio differs on every
-# unseeded request; the transcript may miss one word without the speech being
-# wrong.
+# Note (Minyi Tang): generation samples noise, so the audio differs on every
+# request; the transcript may miss one word without the speech being wrong.
 MAX_WORD_ERRORS = 1
 MAX_QUEUED_REQUESTS = 1
 REQUEST_TIMEOUT_SECONDS = 20

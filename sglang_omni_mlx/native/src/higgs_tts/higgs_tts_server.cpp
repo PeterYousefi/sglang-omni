@@ -77,11 +77,12 @@ struct CollectionField {
   Json::value_t type;
   const char *type_description;
 };
-// Note (Jiaxin Deng): the CUDA request fields this server does not serve,
-// each counted as given by Voxtral's rule: other fields when not null, text
-// fields when not null or "", and collections when not empty. Voice cloning
-// (ref_audio, ref_text, references) needs the codec's encoder, which this
-// server does not load.
+// Note (Jiaxin Deng): the CUDA request fields this server does not serve.
+// Voice cloning (ref_audio, ref_text, references) needs the codec's encoder,
+// which this server does not load.
+// Note (Minyi Tang): each counted as given by the same rule: other fields
+// when not null, text fields when not null or "", and collections when not
+// empty.
 constexpr std::array<const char *, 7> kUnsupportedFields = {
     "duration_tokens",     "initial_codec_chunk_frames", "repetition_penalty",
     "stream_codec_output", "suppress_bootstrap_silence", "token_count",
@@ -682,9 +683,10 @@ private:
   Synthesize(const SpeechRequest &request, AudioChannel &channel,
              const std::atomic<bool> &cancel,
              std::chrono::steady_clock::time_point deadline) const {
-    // Note (Jiaxin Deng): MLX's key sequence is per thread, so a request is
-    // seeded on the worker that samples it; an unseeded one gets a fresh
-    // seed, not the sequence a seeded request left behind.
+    // Note (Minyi Tang): MLX's default key sequence is per thread; this
+    // seeds the thread that generates.
+    // Note (Jiaxin Deng): an unseeded request gets a fresh seed, not the
+    // sequence a seeded request left behind.
     static thread_local std::mt19937_64 seeds{std::random_device{}()};
     mlx::core::random::seed(request.seed.value_or(seeds()));
     higgs_tts::CodecStream stream(model_.codec());

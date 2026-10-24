@@ -79,7 +79,7 @@ int main(int argc, char **argv) {
   const higgs_tts::HiggsTtsModel model(model_path, quantize_bits);
   const double load_seconds = SecondsSince(load_started);
   if (seed.has_value()) {
-    // Note (Jiaxin Deng): MLX's default key sequence is per thread; this
+    // Note (Minyi Tang): MLX's default key sequence is per thread; this
     // seeds the thread that generates.
     mlx::core::random::seed(*seed);
   } else {
