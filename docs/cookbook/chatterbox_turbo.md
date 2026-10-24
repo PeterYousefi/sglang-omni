@@ -76,13 +76,13 @@ Measured on an Apple M5 (24 GB, macOS 26.3.1), warm, with 20 Harvard sentences p
 
 | Voice | Mean latency | Real-time factor | WER (Qwen3-ASR-0.6B) |
 |---|---:|---:|---:|
-| Built-in | 1.04 s | 0.42 | 0.6% |
-| Cloned, male reference | 0.99 s | 0.42 | 0.0% |
+| Built-in | 1.08 s | 0.43 | 0.6% |
+| Cloned, male reference | 1.02 s | 0.44 | 0.0% |
 | Cloned, female reference | 1.22 s | 0.45 | 0.0% |
 
 The latency is end to end over HTTP and includes cloning the voice from the reference on every request. Peak MLX memory is about 3.4 to 3.9 GB, and the server is ready about 1.3 s after it starts.
 
-With the same seed and MLX build, the speech tokens of the native runtime are identical to the [mlx-audio](https://github.com/Blaizzy/mlx-audio) port on the same weights, and so is its audio in the built-in voice. A cloned voice's speech tokens are identical too, and its audio matches at an SNR of at least 90 dB, since the prompt mel is computed in float64 on the CPU rather than in float32. Mac CI checks five seeded requests (two in the built-in voice, one of them capped by `max_new_tokens`, two cloned voices, and 1024 fixed speech tokens voiced at the token cap), their tokens and their audio, against `sglang_omni_mlx/native/ci/model_golden/chatterbox-turbo.json`.
+With the same seed and MLX build, the speech tokens of the native runtime are identical to the [mlx-audio](https://github.com/Blaizzy/mlx-audio) port on the same weights, and so is its audio in the built-in voice. A cloned voice's speech tokens are identical too. Its audio differs from mlx-audio's: the CAM++ speaker encoder averages its last, partial 100-frame segment over its own frames, as the original model's ceil-mode average pooling does, where mlx-audio zero pads it. Mac CI checks five seeded requests (two in the built-in voice, one of them capped by `max_new_tokens`, two cloned voices, and 1024 fixed speech tokens voiced at the token cap), their tokens and their audio, against `sglang_omni_mlx/native/ci/model_golden/chatterbox-turbo.json`.
 
 ### Known limitations
 

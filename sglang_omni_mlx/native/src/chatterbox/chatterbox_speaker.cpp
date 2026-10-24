@@ -131,8 +131,9 @@ mx::array SwapTimeAndChannels(const mx::array &x) {
   return mx::transpose(x, {0, 2, 1});
 }
 
-// Mean over 100-frame segments, the last one zero padded, repeated back over
-// each segment's frames; x is [batch, time, channels].
+// Mean over 100-frame segments, the last, partial one over its own frames as
+// average pooling with ceil mode takes it, repeated back over each segment's
+// frames; x is [batch, time, channels].
 mx::array SegmentMeans(const mx::array &x) {
   const int batch = x.shape(0);
   const int frame_count = x.shape(1);
@@ -146,20 +147,17 @@ mx::array SegmentMeans(const mx::array &x) {
         {x, mx::zeros({batch, padding, channel_count}, mx::float32)}, 1);
   } else {
   }
-  const mx::array segments =
-      mx::mean(mx::reshape(padded, {batch, segment_count, kContextSegmentFrames,
-                                    channel_count}),
-               2);
-  mx::array repeated = mx::reshape(
+  std::vector<float> segment_frames(segment_count, kContextSegmentFrames);
+  segment_frames.back() = static_cast<float>(kContextSegmentFrames - padding);
+  const mx::array segments = mx::divide(
+      mx::sum(mx::reshape(padded, {batch, segment_count, kContextSegmentFrames,
+                                   channel_count}),
+              2),
+      mx::array(segment_frames.begin(), {1, segment_count, 1}, mx::float32));
+  const mx::array repeated = mx::reshape(
       mx::repeat(mx::expand_dims(segments, 2), kContextSegmentFrames, 2),
       {batch, -1, channel_count});
-  repeated = mx::slice(repeated, {0, 0, 0},
-                       {batch, frame_count + padding, channel_count});
-  if (padding > 0) {
-    return mx::slice(repeated, {0, 0, 0}, {batch, frame_count, channel_count});
-  } else {
-    return repeated;
-  }
+  return mx::slice(repeated, {0, 0, 0}, {batch, frame_count, channel_count});
 }
 
 } // namespace
