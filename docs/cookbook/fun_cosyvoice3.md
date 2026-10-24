@@ -69,6 +69,41 @@ sgl-omni serve \
 ```
 
 
+### Native MLX runtime
+
+`cosyvoice3_server` from the native MLX runtime (`sglang_omni_mlx/native`) serves the same `/v1/audio/speech` API on an Apple Silicon Mac from the float16 [`mlx-community/Fun-CosyVoice3-0.5B-2512-fp16`](https://huggingface.co/mlx-community/Fun-CosyVoice3-0.5B-2512-fp16) checkpoint, as one C++ process without PyTorch, ONNX Runtime or Python. The text tokenizer files come from the official checkpoint's `CosyVoice-BlankEN` directory.
+
+```bash
+sglang_omni_mlx/native/scripts/build_runtime.sh ~/omni-runtime
+
+hf download mlx-community/Fun-CosyVoice3-0.5B-2512-fp16 config.json model.safetensors \
+  --revision 18ccb7fbd7246e8cd3420d02f5dd28595cc0fcd9 --local-dir fun-cosyvoice3-mlx-fp16
+hf download FunAudioLLM/Fun-CosyVoice3-0.5B-2512 CosyVoice-BlankEN/vocab.json \
+  CosyVoice-BlankEN/merges.txt CosyVoice-BlankEN/tokenizer_config.json \
+  --revision 29e01c4e8d000f4bcd70751be16fa94bf3d85a18 --local-dir fun-cosyvoice3-mlx-fp16
+
+~/omni-runtime/bin/cosyvoice3_server --model-path fun-cosyvoice3-mlx-fp16 \
+  --model-name FunAudioLLM/Fun-CosyVoice3-0.5B-2512 --port 8000
+```
+
+```bash
+curl -s http://localhost:8000/v1/audio/speech -H "Content-Type: application/json" \
+  -d '{"input": "Hello from Apple Silicon.", "seed": 1}' -o hello.wav
+```
+
+The native server differs from the CUDA server in that:
+
+- Reference audio is not served yet: `ref_audio`, `ref_text` and `references` return 400. Requests synthesize without a speaker prompt, as the CUDA server does when no reference is given, and `instructions` work as on CUDA.
+- `voice` must be `default`; `language` is accepted and unused, as on CUDA.
+- `response_format` is `wav` or `pcm`; `speed` must be `1.0`; `stream_format` must be `audio`.
+- `stream: true` sends the whole utterance's PCM once it is vocoded, since the flow decodes the utterance at once.
+- `max_new_tokens` is at most `2048` speech tokens (25 per second, about 82 seconds); without it the limit is 20 per target text token, as on CUDA.
+- Sampling defaults match the CUDA server (`temperature` 0.7, `top_p` 0.8, `top_k` 20, `repetition_penalty` 1.21, with the repetition-aware redraw); a request without `seed` gets a random one.
+- Started with `--model-name`, it returns 404 for any other `model`; without that flag, `model` is ignored, as on CUDA.
+- Errors are `{"detail": "..."}`. Requests run one at a time and `--max-queued-requests` (default 2) more wait; the rest get 503. A request not finished `--request-timeout-s` (default 600) seconds after it arrives is cancelled with 504, or its stream ends early, and so is one whose client disconnects. A request body over 1 MiB returns 413.
+
+Measured on an Apple M5 (24 GB, macOS 26.3.1), warm, over 8 utterances (76 s of audio): 0.2 s load, real-time factor 0.33, about 2.4 GB peak MLX memory. With the same speech tokens, the legacy Python MLX implementation from [#1964](https://github.com/sgl-project/sglang-omni/pull/1964) takes RTF 0.36 on the same MLX build. Transcribed back with Qwen3-ASR-1.7B-8bit, 16 English corpus sentences give 0.62% WER and 16 Chinese ones 0.97% CER. Mac CI checks four seeded requests' speech tokens (English, Chinese, Chinese with instructions, and a `max_new_tokens` cap) against `sglang_omni_mlx/native/ci/model_golden/fun-cosyvoice3-0.5b-2512.json`.
+
 For Intel GPUs, follow the [Fun-CosyVoice3 XPU recipe](../get_started/installation_xpu.md#fun-cosyvoice3-text-to-speech-single-xpu).
 
 ## Synthesizing Speech

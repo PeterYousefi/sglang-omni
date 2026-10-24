@@ -230,3 +230,20 @@ set_target_properties(voxtral_tts_server voxtral_tts_synthesize PROPERTIES
   BUILD_RPATH "${MLX_LIBRARY_DIRS};@loader_path"
   INSTALL_RPATH "@loader_path")
 install(TARGETS voxtral_tts_server voxtral_tts_synthesize RUNTIME DESTINATION bin)
+
+# Note (Jiaxin Deng): Fun-CosyVoice3 0.5B: cosyvoice3_server, with the CUDA
+# server's /v1/audio/speech API, and its parity tool; the Qwen2 decoder reuses
+# Qwen3's, and the WAV and PCM writers are Voxtral TTS's.
+add_library(cosyvoice3 STATIC src/cosyvoice3/cosyvoice3_vocoder.cpp
+  src/cosyvoice3/cosyvoice3_model.cpp)
+target_link_libraries(cosyvoice3 PUBLIC qwen3_asr voxtral_tts)
+target_compile_options(cosyvoice3 PRIVATE -Wall -Wextra -ffp-contract=off)
+add_executable(cosyvoice3_server src/cosyvoice3/cosyvoice3_server.cpp)
+target_link_libraries(cosyvoice3_server PRIVATE cosyvoice3 asr_service)
+target_compile_options(cosyvoice3_server PRIVATE -Wall -Wextra)
+add_executable(cosyvoice3_synthesize tools/cosyvoice3_synthesize.cpp)
+target_link_libraries(cosyvoice3_synthesize PRIVATE cosyvoice3)
+set_target_properties(cosyvoice3_server cosyvoice3_synthesize PROPERTIES
+  BUILD_RPATH "${MLX_LIBRARY_DIRS};@loader_path"
+  INSTALL_RPATH "@loader_path")
+install(TARGETS cosyvoice3_server cosyvoice3_synthesize RUNTIME DESTINATION bin)

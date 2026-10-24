@@ -128,5 +128,21 @@
       "voice_embedding/pt_female.safetensors": "ce23b97302fe6ca58507b1ae2c2fe1d0a472268b1faf597901cbf75e326a08f9",
       "voice_embedding/pt_male.safetensors": "4ccd63a39d35f483c89485112d35a8a2121cbb0e6d5d124e403e40d03e0c0e82"
     }
+  },
+  "mlx-community/Fun-CosyVoice3-0.5B-2512-fp16": {
+    "revision": "18ccb7fbd7246e8cd3420d02f5dd28595cc0fcd9",
+    "files": {
+      "config.json": "9cc01133150556729617139abb8da29515badce819930e35c7da11a88b595a03",
+      "model.safetensors": "d7dc16402d2086e8b0996fe52462d9616e3eecd64f7cdb62f5c1acc898701374"
+    },
+    "tokenizer": {
+      "repo": "FunAudioLLM/Fun-CosyVoice3-0.5B-2512",
+      "revision": "29e01c4e8d000f4bcd70751be16fa94bf3d85a18",
+      "files": {
+        "CosyVoice-BlankEN/merges.txt": "ac8ff86a72bee70828fbc1119bc4398c6f3a9a6e490d7b0dbe917be025478bd0",
+        "CosyVoice-BlankEN/tokenizer_config.json": "482bd979881423375ca5414e4e0d94cd7c5349dbb17fffd46b4d36d71e62a1bc",
+        "CosyVoice-BlankEN/vocab.json": "ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910"
+      }
+    }
   }
 }
