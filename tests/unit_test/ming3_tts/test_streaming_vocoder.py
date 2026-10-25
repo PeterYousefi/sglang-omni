@@ -159,7 +159,9 @@ def test_interleaved_streams_finish_after_late_payload_and_release_state(
         vocoder.handle_stream_done(request_id)
         assert request_id in vocoder.stream_states
         payload = StagePayload(
-            request_id, OmniRequest("text", params={"stream": True}), {"usage": {}, "finish_reason": "length"}
+            request_id,
+            OmniRequest("text", params={"stream": True}),
+            {"usage": {}, "finish_reason": "length"},
         )
         vocoder.handle_new_request_batch(
             [IncomingMessage(request_id=request_id, type="new_request", data=payload)]
