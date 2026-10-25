@@ -361,9 +361,10 @@ std::optional<std::string> RequestReference(
   return Base64Bytes(data.get<std::string>());
 }
 
-SpeechRequest
-ParseRequest(const Json &body, const chatterbox::ChatterboxModel &model,
-             const std::optional<std::filesystem::path> &allowed_directory) {
+// Every field but the reference audio, which is read once the request is
+// admitted.
+SpeechRequest ParseRequest(const Json &body,
+                           const chatterbox::ChatterboxModel &model) {
   if (!body.is_object()) {
     throw std::invalid_argument("speech request body must be a JSON object");
   } else {
@@ -475,13 +476,6 @@ ParseRequest(const Json &body, const chatterbox::ChatterboxModel &model,
     request.seed = seed.get<uint64_t>();
   }
 
-  // Note (Jiaxin Deng): only the header is read here; decoding and
-  // resampling run in the admitted job, under its deadline.
-  request.reference = RequestReference(body, allowed_directory);
-  if (request.reference.has_value()) {
-    chatterbox::ChatterboxModel::CheckReference(*request.reference);
-  } else {
-  }
   request.text_ids = model.EncodeText(text);
   return request;
 }
@@ -662,7 +656,7 @@ private:
     }
     auto request = std::make_shared<SpeechRequest>();
     try {
-      *request = ParseRequest(body, model_, allowed_directory_);
+      *request = ParseRequest(body, model_);
     } catch (const std::invalid_argument &error) {
       return omni_server::BadRequest(connection, error.what());
     }
@@ -682,6 +676,22 @@ private:
       return omni_server::WriteJson(connection, 503,
                                     {{"detail", "The request queue is full."}});
     } else {
+    }
+    // Note (Jiaxin Deng): the reference is decoded from base64 or read from
+    // disk only once admitted, so the queue bounds how many are held; only its
+    // header is read here, and decoding and resampling run in the job.
+    try {
+      request->reference = RequestReference(body, allowed_directory_);
+      if (request->reference.has_value()) {
+        chatterbox::ChatterboxModel::CheckReference(*request->reference);
+      } else {
+      }
+    } catch (const std::invalid_argument &error) {
+      {
+        std::lock_guard<std::mutex> lock(admission_mutex_);
+        --admitted_requests_;
+      }
+      return omni_server::BadRequest(connection, error.what());
     }
 
     const auto deadline = std::chrono::steady_clock::now() + request_timeout_;
