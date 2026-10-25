@@ -11,7 +11,7 @@
 
 #include "nlohmann/json_fwd.hpp"
 
-namespace qwen3_asr {
+namespace omni_common {
 
 // The regular expression that splits vocab.json/merges.txt text into words.
 enum class SplitPattern { kQwen2, kGpt2 };
@@ -61,4 +61,4 @@ private:
   bool normalizes_nfc_ = true;
 };
 
-} // namespace qwen3_asr
+} // namespace omni_common
