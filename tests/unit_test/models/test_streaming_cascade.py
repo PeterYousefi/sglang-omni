@@ -19,7 +19,7 @@ from sglang_omni.admission import QueueFullError
 from sglang_omni.audio.segmentation import UtteranceSegmenter
 from sglang_omni.config.manager import ConfigManager
 from sglang_omni.config.runtime import resolve_stage_factory_args
-from sglang_omni.models.streaming_cascade.alignment import AlignmentConfig
+from sglang_omni.models.streaming_cascade.alignment import AlignmentConfig, token_ends
 from sglang_omni.models.streaming_cascade.base import (
     ChatMessage,
     Replies,
@@ -1294,10 +1294,12 @@ def transcribing(transcript: str, requests: list[httpx.Request]):
     return handler
 
 
-def interrupted_speech(*after: object, language: str | None = None) -> list[object]:
-    """SPOKEN with its first sentence ended at 2000 ms and 1000 ms of " Five six." spoken when the reply is interrupted, with `after` fed next."""
+def interrupted_speech(
+    *after: object, language: str | None = None, text: str = SPOKEN
+) -> list[object]:
+    """`text`, SPOKEN unless named, with its first sentence ended at 2000 ms and 1000 ms of its second spoken when the reply is interrupted, with `after` fed next."""
     return [
-        text_chunk(SPOKEN, 1, language),
+        text_chunk(text, 1, language),
         *(speech() for _ in range(4)),
         control_chunk(REPLY_PROGRESS, turn=1, text_end=19, audio_ms=2000),
         speech(),
@@ -1324,6 +1326,37 @@ async def test_the_asr_method_keeps_the_prefix_of_the_interrupted_sentence_its_d
     assert [heard_frames(request) for request in requests] == [600 * 24]
     assert b'name="model"\r\n\r\nasr' in requests[0].content
     assert (b'name="language"' in requests[0].content) == (language is not None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "transcript",
+    ["buy three hundred fifty longterm", "Buy 350 long-term"],
+    ids=["spelled-out", "as-written"],
+)
+async def test_the_asr_method_matches_a_transcript_that_writes_numbers_and_words_differently(
+    transcript,
+):
+    """A transcript that spelled out a number the reply wrote in digits, or wrote long-term as one word, matched nothing past that point."""
+    reply = "One two three four. Buy 350 long-term boxes."
+    outputs = await drain(
+        await hearing_aligner("asr", transcribing(transcript, [])),
+        interrupted_speech(
+            control_chunk(REPLY_DELIVERED, turn=1, audio_ms=2600),
+            language="English",
+            text=reply,
+        ),
+    )
+    assert spoken_progress(outputs) == [
+        (19, 2000),
+        (len("One two three four. Buy 350 long-term"), 2600),
+    ]
+
+
+def test_aligner_tokens_map_past_the_characters_the_aligner_drops():
+    assert token_ends("A long-term plan.", ["A", "longterm", "plan"]) == [1, 11, 16]
+    assert token_ends("U.S. troops", ["US", "troops"]) == [3, 11]
+    assert token_ends("A plan.", ["A", "plane"]) is None
 
 
 @pytest.mark.asyncio

@@ -22,6 +22,7 @@ from sglang_omni.models.streaming_cascade.alignment import (
     MAX_ALIGNMENT_AUDIO_BYTES,
     AlignmentBoundary,
     AlignmentResult,
+    token_ends,
 )
 from sglang_omni.models.streaming_cascade.numerals import spoken_text
 
@@ -84,24 +85,16 @@ def create_app(model: str, device: str, default_language: str) -> FastAPI:
                 text=text,
                 language=language,
             )[0]
+        ends = token_ends(text, [token.text for token in result])
+        if ends is None:
+            logger.warning(
+                "aligner tokens %r do not follow %r", [t.text for t in result], text
+            )
+            raise HTTPException(422, "Aligner tokens do not follow the request text")
+        else:
+            pass
         boundaries = []
-        cursor = 0
-        for token in result:
-            position = text.find(token.text, cursor)
-            if position < 0:
-                logger.warning(
-                    "aligner token %r not found in %r after %d",
-                    token.text,
-                    text,
-                    cursor,
-                )
-                raise HTTPException(
-                    422,
-                    "Aligner normalized text requires an explicit original-text mapping",
-                )
-            else:
-                pass
-            cursor = position + len(token.text)
+        for token, end in zip(result, ends):
             # Note (Junnan Li): The aligner works in frames of its own, so a token may end a few milliseconds past the audio; that is the audio's end.
             sample_end = min(
                 round(token.end_time * request.sample_rate_hz), len(samples)
@@ -115,7 +108,7 @@ def create_app(model: str, device: str, default_language: str) -> FastAPI:
                 pass
             boundaries.append(
                 AlignmentBoundary(
-                    text_end_chars=origin[cursor - 1] + 1, audio_end_samples=sample_end
+                    text_end_chars=origin[end - 1] + 1, audio_end_samples=sample_end
                 )
             )
         return AlignmentResult(boundaries=boundaries)

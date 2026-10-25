@@ -35,6 +35,10 @@ from sglang_omni.audio.spoken_prefix import spoken_prefix_end
             "first sentence. second sentence.",
         ),
         ("1 2 3", "", ""),
+        ("A long-term plan", "a longterm plan", "A long-term plan"),
+        ("long term care", "long-term care", "long term care"),
+        ("U.S. troops left", "US troops", "U.S. troops"),
+        ("I can go", "I cannot go", "I"),
     ],
 )
 def test_the_prefix_stops_at_the_first_unit_the_transcript_does_not_say(

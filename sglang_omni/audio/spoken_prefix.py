@@ -83,21 +83,35 @@ def normalized_units(text: str) -> list[tuple[str, int]]:
     return units
 
 
+def unit_characters(text: str) -> list[tuple[str, int | None]]:
+    """The characters of the text's units in order, each with the offset in `text` where its unit ends when it is the unit's last character, else None."""
+    return [
+        (char, end if index == len(unit) - 1 else None)
+        for unit, end in normalized_units(text)
+        for index, char in enumerate(unit)
+    ]
+
+
 def spoken_prefix_end(text: str, transcript: str) -> int:
-    """The end of the longest prefix of `text` that `transcript` says unit by unit, with the punctuation that follows it in `text`; 0 when the first units differ.
+    """The end of the longest prefix of `text` that `transcript` says, with the punctuation that follows it in `text`; 0 when the first units differ.
 
     Matching ignores case and punctuation and reads digits, English numbers
-    up to twenty and ordinary Chinese numbers as the same number. It stops at
-    the first omission, repetition or mismatch and never skips ahead.
+    up to twenty and ordinary Chinese numbers as the same number. Units may
+    join or split, as long-term and longterm do, so the units are compared
+    character by character and the prefix ends where a unit ends in both. It
+    stops at the first omission, repetition or mismatch and never skips
+    ahead.
     """
     end = 0
-    for (unit, unit_end), (heard, _) in zip(
-        normalized_units(text), normalized_units(transcript)
+    for (char, unit_end), (heard, heard_end) in zip(
+        unit_characters(text), unit_characters(transcript)
     ):
-        if unit == heard:
+        if char != heard:
+            break
+        elif unit_end is not None and heard_end is not None:
             end = unit_end
         else:
-            break
+            pass
     if end == 0:
         return 0
     else:

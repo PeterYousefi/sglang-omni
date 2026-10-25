@@ -17,6 +17,8 @@ worker = pytest.importorskip("examples.streaming_cascade.alignment_worker")
         ("Version 2.0.1.", [7, 11, 11, 11, 13]),
         ("It takes 3-5 days.", [2, 8, 10, 11, 12, 17]),
         ("Wait 3.5-5 hours.", [4, 8, 8, 8, 9, 10, 16]),
+        ("A long-term plan.", [1, 11, 16]),
+        ("U.S. troops left.", [3, 11, 16]),
     ],
 )
 def test_worker_maps_numbers_separated_by_punctuation(

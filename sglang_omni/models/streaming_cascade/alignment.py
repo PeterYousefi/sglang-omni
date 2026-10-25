@@ -5,6 +5,7 @@ import asyncio
 import base64
 import logging
 import time
+import unicodedata
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from typing import Literal
@@ -25,6 +26,7 @@ from sglang_omni.models.streaming_cascade.base import (
     stop_running,
     with_language,
 )
+from sglang_omni.models.streaming_cascade.numerals import spoken_text
 from sglang_omni.models.streaming_cascade.recognizers import (
     TranscriptionResult,
     request_transcription,
@@ -59,6 +61,27 @@ class AlignmentBoundary(BaseModel):
 class AlignmentResult(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     boundaries: list[AlignmentBoundary]
+
+
+def is_aligned_character(char: str) -> bool:
+    """Whether the forced aligner keeps the character in its words: letters, numbers and the apostrophe."""
+    return char == "'" or unicodedata.category(char)[0] in "LN"
+
+
+def token_ends(text: str, tokens: list[str]) -> list[int] | None:
+    """Where each of the forced aligner's tokens ends in `text`, skipping the characters the aligner dropped from its words, such as the hyphen of long-term; None when a token does not follow the text."""
+    ends = []
+    cursor = 0
+    for token in tokens:
+        for char in token:
+            while cursor < len(text) and not is_aligned_character(text[cursor]):
+                cursor += 1
+            if cursor < len(text) and text[cursor] == char:
+                cursor += 1
+            else:
+                return None
+        ends.append(cursor)
+    return ends
 
 
 class AlignmentConfig(ComponentConfig):
@@ -401,7 +424,12 @@ class Alignment(StreamComponent):
                 "heard-speech transcription sent an invalid result: %s", error
             )
             return 0
-        matched = spoken_prefix_end(heard.text, result.text)
+        # note (luojiaxuan): The transcript may spell out a number the reply writes in digits, or the other way round, so both are compared with their numbers read out as words.
+        spoken, origin = spoken_text(heard.text, heard.language)
+        spoken_end = spoken_prefix_end(
+            spoken, spoken_text(result.text, heard.language)[0]
+        )
+        matched = origin[spoken_end - 1] + 1 if spoken_end else 0
         logger.info(
             "heard turn %d to %.0f ms: %d ms of sentence audio transcribed as %r in %.0f ms keeps %d of %d chars",
             heard.turn,

@@ -171,7 +171,7 @@ def english_numeral(digits: str, is_grouped: bool) -> str:
 
 
 def number_words(
-    numeral: str, language: str, is_grouped: bool, ordinal_suffix: str | None
+    numeral: str, language: str | None, is_grouped: bool, ordinal_suffix: str | None
 ) -> str:
     """The numeral, a digit run with optional thousands separators or a decimal, read out in the language; another language keeps its digits."""
     whole, point, fraction = numeral.replace(",", "").partition(".")
@@ -189,7 +189,7 @@ def number_words(
         return numeral
 
 
-def spoken_text(text: str, language: str) -> tuple[str, list[int]]:
+def spoken_text(text: str, language: str | None) -> tuple[str, list[int]]:
     """The text with each number read out as words, and for each spoken character the original character it stands for.
 
     English quantity ranges use to; digit runs one space apart are groups of a longer number, such as a phone number.
