@@ -295,7 +295,7 @@ def run(transcribe_corpus: TranscribeCorpus) -> None:
         metrics = {}
     elif golden.get("kind") == "cosyvoice3":
         results = cosyvoice3_golden.synthesize_cases(
-            arguments.runtime_bin, arguments.data_root, golden
+            arguments.runtime_bin, arguments.data_root, golden, chip()
         )
         metrics = {}
     else:
@@ -335,8 +335,10 @@ def run(transcribe_corpus: TranscribeCorpus) -> None:
         return
     else:
         pass
-    if golden.get("kind") in ("voxtral_tts", "cosyvoice3"):
+    if golden.get("kind") == "voxtral_tts":
         report(*voxtral_golden.check(golden, device, results))
+    elif golden.get("kind") == "cosyvoice3":
+        report(*cosyvoice3_golden.check(golden, device, results))
     else:
         report(*check(golden, device, results, metrics))
 

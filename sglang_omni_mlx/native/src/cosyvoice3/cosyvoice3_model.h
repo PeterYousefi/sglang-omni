@@ -103,8 +103,8 @@ public:
                            const std::function<void(int)> &on_token) const;
 
   // Float32 samples of speech tokens in the reference's voice, or with no
-  // speaker without one; calls on_step before each flow step, which may
-  // throw to stop it.
+  // speaker without one; calls on_step before each flow step and before the
+  // vocoder, which may throw to stop it.
   mlx::core::array Vocode(const std::vector<int> &speech_tokens,
                           const std::optional<Reference> &reference,
                           const std::function<void()> &on_step) const;

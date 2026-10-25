@@ -118,7 +118,7 @@ mx::array OverlapAdd(const mx::array &frames) {
 Flow::Flow(const qwen3_asr::Checkpoint &checkpoint)
     : checkpoint_(checkpoint),
       dtype_probe_(checkpoint.Weight("flow.input_embedding.weight")),
-      // Note (Jiaxin Deng): one fixed noise draw, so a request's mel depends
+      // Note (yexiaodong): one fixed noise draw, so a request's mel depends
       // only on its tokens.
       noise_(mx::random::normal({1, kMelBinCount, kMaxMelFrames}, mx::float32,
                                 0.0f, 1.0f, mx::random::key(0))),
@@ -221,7 +221,7 @@ mx::array Flow::Decode(const std::vector<int> &speech_tokens,
         mx::multiply(Scalar(1.0 + kGuidanceRate, dtype), halves[0]),
         mx::multiply(Scalar(kGuidanceRate, dtype), halves[1]));
     x = mx::add(x, mx::multiply(dt, guided));
-    // Note (Jiaxin Deng): one evaluation per step bounds the graph and the
+    // Note (yexiaodong): one evaluation per step bounds the graph and the
     // memory it holds.
     mx::eval(x);
     t = mx::add(t, dt);
@@ -249,7 +249,7 @@ mx::array Flow::Velocity(const mx::array &x, const mx::array &mu,
   const mx::array time_angles = mx::multiply(
       mx::expand_dims(mx::multiply(Scalar(1000.0, dtype), timesteps), 1),
       mx::expand_dims(frequencies, 0));
-  // Note (Jiaxin Deng): the float32 sinusoid is cast before the time MLP so
+  // Note (yuhui): the float32 sinusoid is cast before the time MLP so
   // it does not promote the half-precision DiT.
   mx::array timestep_embedding = mx::astype(
       mx::concatenate({mx::sin(time_angles), mx::cos(time_angles)}, -1), dtype);
@@ -346,7 +346,7 @@ mx::array Flow::Block(const mx::array &x, const mx::array &timestep_embedding,
 Hift::Hift(const qwen3_asr::Checkpoint &checkpoint)
     : checkpoint_(checkpoint), window_(HannWindow()),
       initial_phases_(mx::array(0.0f)) {
-  // Note (Jiaxin Deng): the first harmonic starts at phase zero and the
+  // Note (yexiaodong): the first harmonic starts at phase zero and the
   // others at fixed random phases, so the source is the same every request.
   const mx::array phases =
       mx::random::uniform({1, kHarmonicCount}, mx::float32, mx::random::key(1));
@@ -453,7 +453,7 @@ mx::array Hift::Decode(const mx::array &mel) const {
   const int frame_count = mel.shape(2);
   const mx::array frames = mx::transpose(mel, {0, 2, 1});
 
-  // Note (Jiaxin Deng): pitch runs in float32, since its error accumulates in
+  // Note (yuhui): pitch runs in float32, since its error accumulates in
   // the harmonic source's phase.
   mx::array pitch = mx::astype(frames, mx::float32);
   for (int i = 0; i < 5; ++i) {
@@ -481,7 +481,7 @@ mx::array Hift::Decode(const mx::array &mel) const {
                    window_),
       -1);
   const mx::array bins = mx::slice(spectrum, {0, 0}, {fft_frames, kFftBins});
-  // Note (Jiaxin Deng): the float32 source spectrum is cast so it does not
+  // Note (yuhui): the float32 source spectrum is cast so it does not
   // promote the half-precision convolutions.
   const mx::array source_spectrum = mx::astype(
       mx::expand_dims(mx::concatenate({mx::real(bins), mx::imag(bins)}, -1), 0),

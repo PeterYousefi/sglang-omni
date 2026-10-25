@@ -320,7 +320,7 @@ constexpr const char *kSpecialTokens[] = {
     "[ǜ]",
 };
 
-// Note (lgyStoic): the Qwen2 decoder's checkpoint mapping and checks; the
+// Note (Jiaxin Deng): lgyStoic's Qwen2 checkpoint mapping and checks; the
 // flow, HiFT and speaker encoder weights keep their stored names.
 qwen3_asr::Checkpoint
 LoadCheckpoint(const std::filesystem::path &model_directory) {
@@ -340,6 +340,20 @@ LoadCheckpoint(const std::filesystem::path &model_directory) {
   if (!architecture.is_object()) {
     throw std::invalid_argument("CosyVoice3 config.llm must be an object");
   } else {
+  }
+  // Note (Jiaxin Deng): the MLX checkpoint's config.llm names only these
+  // sizes, so they are required; the decoder's other settings are the 0.5B
+  // model's constants, checked when given, and its tensor shapes below.
+  const nlohmann::json required = {{"llm_input_size", kHiddenSize},
+                                   {"llm_output_size", kHiddenSize},
+                                   {"speech_token_size", kSpeechTokenSize},
+                                   {"extended_vocab_size", 200}};
+  for (const auto &[name, value] : required.items()) {
+    if (!architecture.contains(name) || architecture.at(name) != value) {
+      throw std::invalid_argument("CosyVoice3 config.llm." + name +
+                                  " must be " + value.dump());
+    } else {
+    }
   }
   for (const auto &[name, value] : expected.items()) {
     if (architecture.contains(name) &&
@@ -709,7 +723,7 @@ CosyVoice3Model::Generate(const std::vector<int> &prompt_text_ids,
       const size_t window_start = recent.size() > kRepetitionWindow
                                       ? recent.size() - kRepetitionWindow
                                       : 0;
-      // Note (Jiaxin Deng): a speech token among the last ten is drawn again
+      // Note (yexiaodong): a speech token among the last ten is drawn again
       // from the whole distribution without it, as the reference sampler
       // does to break loops.
       if (token < kSpeechTokenSize &&
@@ -759,7 +773,10 @@ mx::array CosyVoice3Model::Samples(const mx::array &mel) const {
 mx::array CosyVoice3Model::Vocode(const std::vector<int> &speech_tokens,
                                   const std::optional<Reference> &reference,
                                   const std::function<void()> &on_step) const {
-  return Samples(Mel(speech_tokens, reference, on_step));
+  const mx::array mel = Mel(speech_tokens, reference, on_step);
+  mx::eval(mel);
+  on_step();
+  return Samples(mel);
 }
 
 ReferenceAudio ReadReferenceAudio(std::string_view wav_bytes) {

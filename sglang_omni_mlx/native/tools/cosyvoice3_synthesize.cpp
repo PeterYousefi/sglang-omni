@@ -63,13 +63,13 @@ int main(int argc, char **argv) {
     } else if (argument == "--text") {
       text.text = value;
     } else if (argument == "--instructions") {
-      text.instructions = value;
+      text.instructions = qwen3_asr::StripUnicodeWhitespace(value);
     } else if (argument == "--reference-audio") {
       reference_audio_path = value;
     } else if (argument == "--reference-input") {
       reference_input_path = value;
     } else if (argument == "--reference-text") {
-      text.reference_text = value;
+      text.reference_text = qwen3_asr::StripUnicodeWhitespace(value);
     } else if (argument == "--seed") {
       options.seed = std::stoull(value);
     } else if (argument == "--temperature") {
@@ -96,6 +96,16 @@ int main(int argc, char **argv) {
       std::cerr << argv[0] << ": unknown option " << argument << "\n";
       return 2;
     }
+  }
+  // Note (Jiaxin Deng): as the server, blank instructions or transcripts are
+  // none.
+  if (text.instructions.has_value() && text.instructions->empty()) {
+    text.instructions.reset();
+  } else {
+  }
+  if (text.reference_text.has_value() && text.reference_text->empty()) {
+    text.reference_text.reset();
+  } else {
   }
   const auto load_started = std::chrono::steady_clock::now();
   const cosyvoice3::CosyVoice3Model model(model_path);

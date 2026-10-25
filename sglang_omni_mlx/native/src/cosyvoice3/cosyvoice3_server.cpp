@@ -90,7 +90,7 @@ struct CollectionField {
   Json::value_t type;
   const char *type_description;
 };
-// Note (Jiaxin Deng): fields this server does not serve, each counted as
+// Note (Minyi Tang): fields this server does not serve, each counted as
 // given by the CUDA request model's rule: text and flag fields when not null
 // or "", and collections when not empty. CUDA's request model first rejects a
 // collection of another type, even an empty one.
@@ -139,7 +139,7 @@ Json FieldOr(const Json &body, const char *name, Json fallback) {
 }
 
 // body's field, null included, or fallback when it is missing.
-// Note (Jiaxin Deng): CUDA's CreateSpeechRequest takes null as the default
+// Note (Minyi Tang): CUDA's CreateSpeechRequest takes null as the default
 // only for the fields it types as optional, and rejects it for the rest.
 Json PresentFieldOr(const Json &body, const char *name, Json fallback) {
   const auto found = body.find(name);
@@ -434,6 +434,27 @@ RequestReference(const Json &body) {
   return {ReferenceSource{&data->get_ref<const std::string &>(), true}, text};
 }
 
+// value as an integer when it is one, or a float with an integral value, as
+// CUDA's request model takes 5.0 for an int field.
+std::optional<int64_t> IntegralValue(const Json &value) {
+  if (value.is_number_unsigned()) {
+    return value.get<uint64_t>() >
+                   static_cast<uint64_t>(std::numeric_limits<int64_t>::max())
+               ? std::nullopt
+               : std::optional<int64_t>(value.get<int64_t>());
+  } else if (value.is_number_integer()) {
+    return value.get<int64_t>();
+  } else if (value.is_number_float()) {
+    const double number = value.get<double>();
+    return std::isfinite(number) && std::trunc(number) == number &&
+                   std::fabs(number) < 9.0e18
+               ? std::optional<int64_t>(static_cast<int64_t>(number))
+               : std::nullopt;
+  } else {
+    return std::nullopt;
+  }
+}
+
 // A number field within [low, high], or fallback when it is missing or null.
 float NumberField(const Json &body, const char *name, float fallback,
                   double low, double high, const std::string &range) {
@@ -508,7 +529,7 @@ SpeechRequest ParseRequest(const Json &body,
     throw std::invalid_argument("model must be a string");
   } else {
   }
-  // Note (Jiaxin Deng): as CUDA's AliasChoices("voice", "speaker"), voice
+  // Note (Minyi Tang): as CUDA's AliasChoices("voice", "speaker"), voice
   // wins whenever it is given, even as null.
   const Json voice = PresentFieldOr(
       body, "voice", PresentFieldOr(body, "speaker", Json("default")));
@@ -526,7 +547,7 @@ SpeechRequest ParseRequest(const Json &body,
     throw std::invalid_argument("response_format must be a string");
   } else {
   }
-  // Note (Jiaxin Deng): as CUDA's response_format.strip().lower().
+  // Note (Minyi Tang): as CUDA's response_format.strip().lower().
   for (const char character :
        qwen3_asr::StripUnicodeWhitespace(response_format.get<std::string>())) {
     request.response_format.push_back(
@@ -575,22 +596,19 @@ SpeechRequest ParseRequest(const Json &body,
         "repetition_penalty must be a number in (0, 2]");
   } else {
   }
-  const Json top_k = FieldOr(body, "top_k", Json(sampling.top_k));
-  if (!top_k.is_number_integer() ||
-      (top_k.is_number_unsigned() &&
-       top_k.get<uint64_t>() >
-           static_cast<uint64_t>(cosyvoice3::kTotalSpeechVocabularySize)) ||
-      (top_k.get<int64_t>() != -1 && top_k.get<int64_t>() < 1) ||
-      top_k.get<int64_t>() > cosyvoice3::kTotalSpeechVocabularySize) {
+  const std::optional<int64_t> top_k =
+      IntegralValue(FieldOr(body, "top_k", Json(sampling.top_k)));
+  if (!top_k.has_value() || (*top_k != -1 && *top_k < 1) ||
+      *top_k > cosyvoice3::kTotalSpeechVocabularySize) {
     throw std::invalid_argument(
         "top_k must be -1 or an integer from 1 to " +
         std::to_string(cosyvoice3::kTotalSpeechVocabularySize));
   } else {
   }
-  sampling.top_k = top_k.get<int>();
+  sampling.top_k = static_cast<int>(*top_k);
   const Json seed = FieldOr(body, "seed", Json());
-  if (seed.is_number_integer()) {
-    sampling.seed = static_cast<uint64_t>(seed.get<int64_t>());
+  if (IntegralValue(seed).has_value()) {
+    sampling.seed = static_cast<uint64_t>(*IntegralValue(seed));
   } else if (seed.is_null()) {
     static thread_local std::mt19937_64 generator{std::random_device{}()};
     sampling.seed = generator();
@@ -598,16 +616,17 @@ SpeechRequest ParseRequest(const Json &body,
     throw std::invalid_argument("seed must be an integer");
   }
   const Json max_new_tokens = FieldOr(body, "max_new_tokens", Json());
+  const std::optional<int64_t> token_limit = IntegralValue(max_new_tokens);
   if (max_new_tokens.is_null()) {
-  } else if (!max_new_tokens.is_number_integer()) {
+  } else if (!token_limit.has_value()) {
     throw std::invalid_argument("max_new_tokens must be an integer");
-  } else if (max_new_tokens.get<int64_t>() <= 0) {
+  } else if (*token_limit <= 0) {
     throw std::invalid_argument("max_new_tokens must be greater than 0");
-  } else if (max_new_tokens.get<int64_t>() > cosyvoice3::kMaxSpeechTokens) {
+  } else if (*token_limit > cosyvoice3::kMaxSpeechTokens) {
     throw std::invalid_argument("max_new_tokens must be at most " +
                                 std::to_string(cosyvoice3::kMaxSpeechTokens));
   } else {
-    sampling.max_new_tokens = max_new_tokens.get<int>();
+    sampling.max_new_tokens = static_cast<int>(*token_limit);
   }
   return request;
 }
@@ -742,7 +761,7 @@ public:
     throw std::logic_error("cosyvoice3 serves no transcriptions");
   }
   bool Transcribes() const override { return false; }
-  // Note (Jiaxin Deng): /health counts the slots admission holds, which the
+  // Note (Minyi Tang): /health counts the slots admission holds, which the
   // worker frees only after it marks a request done; once /health shows the
   // server idle, it admits a full queue.
   std::map<std::string, int>
@@ -795,18 +814,7 @@ private:
     } catch (const std::invalid_argument &error) {
       return omni_server::BadRequest(connection, error.what());
     }
-    std::tie(request.prompt_ids, request.target_ids) =
-        model_.EncodeText(request.text);
-    // Note (Jiaxin Deng): SOS, the text, TASK and every speech token must fit
-    // the decoder's context, which text of unmerged bytes can overflow.
-    if (request.prompt_ids.size() + request.target_ids.size() + 2 +
-            kMaxReferenceSpeechTokens + cosyvoice3::kMaxSpeechTokens >
-        static_cast<size_t>(cosyvoice3::kMaxContextTokens)) {
-      return omni_server::BadRequest(
-          connection, "input and instructions take too many text tokens");
-    } else {
-    }
-    // Note (Jiaxin Deng): no client can know a generated name, and the CUDA
+    // Note (Minyi Tang): no client can know a generated name, and the CUDA
     // speech API ignores model, so only a chosen name is enforced.
     if (has_chosen_model_name() && request.model.has_value() &&
         *request.model != model_name()) {
@@ -825,21 +833,33 @@ private:
                                     {{"detail", "The request queue is full."}});
     } else {
     }
-    // Note (Jiaxin Deng): reference audio is read and resampled only once the
-    // request holds a slot, so a burst of large references cannot hold more
-    // than the queue allows; bad audio frees the slot again.
-    if (reference_source.has_value()) {
-      try {
+    // Note (Jiaxin Deng): the text is tokenized and the reference audio read
+    // and resampled only once the request holds a slot, so a burst of long
+    // texts or large references cannot hold more than the queue allows; a
+    // request refused here frees its slot again.
+    try {
+      std::tie(request.prompt_ids, request.target_ids) =
+          model_.EncodeText(request.text);
+      // Note (Jiaxin Deng): SOS, the text, TASK and every speech token must
+      // fit the decoder's context, which text of unmerged bytes can overflow.
+      if (request.prompt_ids.size() + request.target_ids.size() + 2 +
+              kMaxReferenceSpeechTokens + cosyvoice3::kMaxSpeechTokens >
+          static_cast<size_t>(cosyvoice3::kMaxContextTokens)) {
+        throw std::invalid_argument(
+            "input and instructions take too many text tokens");
+      } else {
+      }
+      if (reference_source.has_value()) {
         request.reference_audio = cosyvoice3::ReadReferenceAudio(
             SourceBytes(*reference_source, allowed_directory_));
-      } catch (const std::invalid_argument &error) {
-        {
-          std::lock_guard<std::mutex> lock(admission_mutex_);
-          --admitted_requests_;
-        }
-        return omni_server::BadRequest(connection, error.what());
+      } else {
       }
-    } else {
+    } catch (const std::invalid_argument &error) {
+      {
+        std::lock_guard<std::mutex> lock(admission_mutex_);
+        --admitted_requests_;
+      }
+      return omni_server::BadRequest(connection, error.what());
     }
 
     const auto deadline = std::chrono::steady_clock::now() + request_timeout_;
@@ -853,7 +873,7 @@ private:
         cancel,
         [this, channel](std::optional<qwen3_asr::TranscriptionResult>,
                         std::exception_ptr error) {
-          // Note (Jiaxin Deng): the slot frees before the response can end,
+          // Note (Minyi Tang): the slot frees before the response can end,
           // so a client's next request is never refused for its previous one.
           {
             std::lock_guard<std::mutex> lock(admission_mutex_);
@@ -891,7 +911,7 @@ private:
         timed_out = true;
         break;
       } else {
-        // Note (Jiaxin Deng): the client is watched while its request waits
+        // Note (Minyi Tang): the client is watched while its request waits
         // in the queue too, and a request cancelled there never starts.
         client_left = ClientLeft(client_socket);
         if (client_left) {
@@ -902,13 +922,13 @@ private:
     }
     lock.unlock();
     if (client_left) {
-      // Note (Jiaxin Deng): nothing is read from the channel, which the
+      // Note (Minyi Tang): nothing is read from the channel, which the
       // synthesis may still be writing.
       cancel->store(true);
       return kClientLeftStatus;
     } else {
     }
-    // Note (Jiaxin Deng): the synthesis stops at the deadline itself, and may
+    // Note (Minyi Tang): the synthesis stops at the deadline itself, and may
     // report that before this thread's wait reaches the deadline. Any other
     // error is a failure, even one that arrives after the deadline.
     if (!timed_out && ReachedDeadline(channel->error)) {
@@ -916,7 +936,7 @@ private:
     } else {
     }
     if (timed_out) {
-      // Note (Jiaxin Deng): a request still queued is dropped once the worker
+      // Note (Minyi Tang): a request still queued is dropped once the worker
       // reaches it.
       cancel->store(true);
       std::cerr << "speech generation timed out\n";
@@ -969,7 +989,7 @@ private:
   Synthesize(const SpeechRequest &request, AudioChannel &channel,
              const std::atomic<bool> &cancel,
              std::chrono::steady_clock::time_point deadline) const {
-    // Note (Jiaxin Deng): the synthesis checks its own deadline, since the
+    // Note (Minyi Tang): the synthesis checks its own deadline, since the
     // request's thread may be blocked writing to a slow client.
     const auto check = [&] {
       if (cancel.load()) {
@@ -999,7 +1019,7 @@ private:
     const std::vector<int> kept =
         cosyvoice3::TrimSilentRuns(generated.speech_tokens);
     if (kept.empty()) {
-      // Note (Jiaxin Deng): the CUDA vocoder raises on no speech tokens
+      // Note (Minyi Tang): the CUDA vocoder raises on no speech tokens
       // rather than answer silence.
       throw std::runtime_error("Fun-CosyVoice3 generated no speech tokens");
     } else {

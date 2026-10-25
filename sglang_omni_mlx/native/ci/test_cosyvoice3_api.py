@@ -37,7 +37,7 @@ LONG_SENTENCE = " ".join([SENTENCE] * 8)
 # 2048 speech tokens, 82 s of speech: an M5 takes 19 s, past REQUEST_TIMEOUT_SECONDS
 # and past CANCEL_SECONDS after a disconnect.
 PASSAGE = " ".join([SENTENCE] * 50)
-# Note (Jiaxin Deng): the transcript may miss one word without the speech
+# Note (Minyi Tang): the transcript may miss one word without the speech
 # being wrong.
 MAX_WORD_ERRORS = 1
 MAX_QUEUED_REQUESTS = 1
@@ -49,7 +49,8 @@ MAX_REQUEST_BODY_BYTES = 32 * 1024 * 1024
 REFERENCE_CLIP = "0000_en_short"
 REFERENCE_TEXT = "Socrates begins the Timaeus with a summary of the Republic."
 CLONED_SENTENCE = "The weather is lovely today, so let us take a walk in the park."
-# A cancelled synthesis stops within one speech token or one flow step.
+# A cancelled synthesis stops within one speech token, one flow step or the
+# vocoder pass after the flow.
 CANCEL_SECONDS = 4.0
 
 
@@ -497,6 +498,23 @@ def test_cosyvoice3_ignores_unsupported_fields_left_empty(
     assert status == 200
 
 
+def test_cosyvoice3_takes_integral_floats_for_integer_fields(
+    cosyvoice3_server: Server,
+) -> None:
+    """CUDA's request model takes 5.0 for an int field."""
+    status, headers, _ = speak(
+        cosyvoice3_server,
+        {
+            "input": "hi",
+            "response_format": "pcm",
+            "max_new_tokens": 2.0,
+            "top_k": 20.0,
+            "seed": 1.0,
+        },
+    )
+    assert (status, headers["X-Completion-Tokens"]) == (200, "2")
+
+
 def test_cosyvoice3_trims_and_lowercases_its_response_format(
     cosyvoice3_server: Server,
 ) -> None:
@@ -755,6 +773,7 @@ def test_cosyvoice3_needs_an_allowed_directory_for_local_paths(
         ({"input": "hi", "top_p": 1.5}, "top_p must be a number in (0, 1]"),
         ({"input": "hi", "top_k": 0}, "top_k must be -1 or an integer"),
         ({"input": "hi", "top_k": 2.5}, "top_k must be -1 or an integer"),
+        ({"input": "hi", "max_new_tokens": 1.5}, "max_new_tokens must be an integer"),
         ({"input": "hi", "top_k": 2**64 - 1}, "top_k must be -1 or an integer"),
         ({"input": "hi", "repetition_penalty": 0}, "repetition_penalty must be"),
         ({"input": "hi", "repetition_penalty": 3}, "repetition_penalty must be"),
@@ -833,7 +852,7 @@ def test_cosyvoice3_rejects_invalid_requests(
 def test_cosyvoice3_refuses_a_declared_body_too_large_without_reading_it(
     cosyvoice3_server: Server,
 ) -> None:
-    # Note (Jiaxin Deng): the body is never sent, so a server that waits to
+    # Note (Minyi Tang): the body is never sent, so a server that waits to
     # read it never answers.
     connection = http.client.HTTPConnection(
         "127.0.0.1", cosyvoice3_server.port, timeout=10
@@ -868,7 +887,7 @@ def test_cosyvoice3_caps_a_chunked_body_it_cannot_size_in_advance(
     connection = http.client.HTTPConnection(
         "127.0.0.1", cosyvoice3_server.port, timeout=60
     )
-    # Note (Jiaxin Deng): a body of one chunk is read to its end before the
+    # Note (Minyi Tang): a body of one chunk is read to its end before the
     # answer, so the socket closes with nothing unread and is not reset.
     connection.request("POST", "/v1/audio/speech", body=[body])
     response = connection.getresponse()
@@ -880,7 +899,7 @@ def test_cosyvoice3_caps_a_chunked_body_it_cannot_size_in_advance(
 def test_cosyvoice3_server_serves_no_transcriptions(
     cosyvoice3_server: Server,
 ) -> None:
-    # Note (Jiaxin Deng): civetweb answers a path it does not serve without
+    # Note (Minyi Tang): civetweb answers a path it does not serve without
     # reading the request's body, and a socket closed with bytes unread is
     # reset, which can drop the answer; so the request has no body.
     status, _ = cosyvoice3_server.request("POST", "/v1/audio/transcriptions")
