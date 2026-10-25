@@ -620,7 +620,7 @@ hf download bosonai/higgs-audio-v3-tts-4b \
   --model-name bosonai/higgs-audio-v3-tts-4b --port 8000
 ```
 
-The zero-shot and inline control token requests above work unchanged, and the streaming ones do without their `references`. The native server differs from the CUDA server in that:
+The zero-shot request above works unchanged; the streaming and inline control token requests work once their `references` are removed. The native server differs from the CUDA server in that:
 
 - Voice cloning is not served yet: `voice` must be `default`, and `ref_audio`, `ref_text` and `references` return 400.
 - `response_format` is `wav` or `pcm`; `speed` must be `1.0`; `stream_format` must be `audio`.
