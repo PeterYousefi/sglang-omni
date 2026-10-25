@@ -10,6 +10,7 @@
 #include <string>
 
 #include "common/audio.h"
+#include "qwen3_asr/qwen3_audio.h"
 
 namespace cosyvoice3 {
 
@@ -52,7 +53,7 @@ mx::array ApplyRotary(const mx::array &x, const mx::array &cos,
 
 } // namespace
 
-SpeechTokenizer::SpeechTokenizer(const qwen3_asr::Checkpoint &checkpoint)
+SpeechTokenizer::SpeechTokenizer(const omni_common::Checkpoint &checkpoint)
     : checkpoint_(checkpoint), rotary_cos_(0.0f), rotary_sin_(0.0f) {
   const mx::array exponents =
       mx::divide(mx::astype(mx::arange(0, kHeadDim, 2), mx::float32),
@@ -115,14 +116,15 @@ mx::array SpeechTokenizer::Block(const mx::array &x, int layer,
 
   const mx::array mlp_input =
       checkpoint_.LayerNorm(after_attention, prefix + ".mlp_ln", kMlpNormEps);
-  const mx::array mlp_output = checkpoint_.Linear(
-      qwen3_asr::Gelu(checkpoint_.Linear(mlp_input, prefix + ".mlp.layers.0")),
-      prefix + ".mlp.layers.2");
+  const mx::array mlp_output =
+      checkpoint_.Linear(omni_common::Gelu(checkpoint_.Linear(
+                             mlp_input, prefix + ".mlp.layers.0")),
+                         prefix + ".mlp.layers.2");
   return mx::add(after_attention, mlp_output);
 }
 
 mx::array SpeechTokenizer::Encode(const std::vector<float> &samples_16k) const {
-  if (samples_16k.size() / qwen3_asr::kHopLength > kMaxMelFrames) {
+  if (samples_16k.size() / omni_common::kHopLength > kMaxMelFrames) {
     throw std::invalid_argument(
         "the speech tokenizer takes at most 30 s of audio");
   } else {
@@ -133,10 +135,10 @@ mx::array SpeechTokenizer::Encode(const std::vector<float> &samples_16k) const {
       mx::expand_dims(mx::transpose(qwen3_asr::LogMel(
                           samples_16k, qwen3_asr::AudioLayout::kReference)),
                       0);
-  x = qwen3_asr::Gelu(
+  x = omni_common::Gelu(
       mx::add(mx::conv1d(x, checkpoint_.Weight("encoder.conv1.weight"), 2, 1),
               checkpoint_.Weight("encoder.conv1.bias")));
-  x = qwen3_asr::Gelu(
+  x = omni_common::Gelu(
       mx::add(mx::conv1d(x, checkpoint_.Weight("encoder.conv2.weight"), 2, 1),
               checkpoint_.Weight("encoder.conv2.bias")));
   const int token_count = x.shape(1);

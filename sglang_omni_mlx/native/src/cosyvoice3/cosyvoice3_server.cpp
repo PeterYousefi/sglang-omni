@@ -56,10 +56,10 @@
 
 #include "civetweb.h"
 #include "common/http.h"
+#include "common/text.h"
 #include "cosyvoice3/cosyvoice3_model.h"
 #include "qwen3_asr/asr_service.h"
 #include "qwen3_asr/qwen3_asr_transcriber.h"
-#include "qwen3_asr/realtime.h"
 #include "voxtral_tts/voxtral_tts_codec.h"
 
 namespace {
@@ -252,7 +252,7 @@ std::string ReadAllowedFile(const std::string &path,
 
 std::string Base64Bytes(const std::string &text) {
   const std::optional<std::vector<uint8_t>> bytes =
-      qwen3_asr::DecodeBase64(text);
+      omni_common::DecodeBase64(text);
   if (!bytes.has_value() || bytes->empty()) {
     throw std::invalid_argument("reference audio is not valid base64");
   } else {
@@ -333,7 +333,7 @@ std::optional<std::string> OptionalText(const Json &object, const char *name,
   } else {
   }
   const std::string stripped =
-      qwen3_asr::StripUnicodeWhitespace(value.get<std::string>());
+      omni_common::StripUnicodeWhitespace(value.get<std::string>());
   if (CharacterCount(stripped) > kMaxInputCharacters) {
     throw std::invalid_argument(label + " must be at most " +
                                 std::to_string(kMaxInputCharacters) +
@@ -481,7 +481,7 @@ SpeechRequest ParseRequest(const Json &body,
   RejectUnsupportedFields(body);
   const Json input = FieldOr(body, "input", Json());
   if (!input.is_string() ||
-      qwen3_asr::StripUnicodeWhitespace(input.get<std::string>()).empty()) {
+      omni_common::StripUnicodeWhitespace(input.get<std::string>()).empty()) {
     throw std::invalid_argument("input must be a non-empty string");
   } else if (CharacterCount(input.get<std::string>()) > kMaxInputCharacters) {
     throw std::invalid_argument("input must be at most " +
@@ -496,7 +496,7 @@ SpeechRequest ParseRequest(const Json &body,
   if (instructions.is_string()) {
     // Note (Jiaxin Deng): as CUDA, blank instructions are none.
     const std::string stripped =
-        qwen3_asr::StripUnicodeWhitespace(instructions.get<std::string>());
+        omni_common::StripUnicodeWhitespace(instructions.get<std::string>());
     if (CharacterCount(stripped) > kMaxInputCharacters) {
       throw std::invalid_argument("instructions must be at most " +
                                   std::to_string(kMaxInputCharacters) +
@@ -548,8 +548,8 @@ SpeechRequest ParseRequest(const Json &body,
   } else {
   }
   // Note (Minyi Tang): as CUDA's response_format.strip().lower().
-  for (const char character :
-       qwen3_asr::StripUnicodeWhitespace(response_format.get<std::string>())) {
+  for (const char character : omni_common::StripUnicodeWhitespace(
+           response_format.get<std::string>())) {
     request.response_format.push_back(
         static_cast<char>(std::tolower(static_cast<unsigned char>(character))));
   }

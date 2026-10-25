@@ -244,7 +244,7 @@ mx::array SegmentMeans(const mx::array &x) {
 
 } // namespace
 
-SpeakerEncoder::SpeakerEncoder(const qwen3_asr::Checkpoint &checkpoint) {
+SpeakerEncoder::SpeakerEncoder(const omni_common::Checkpoint &checkpoint) {
   // Note (Jiaxin Deng): the checkpoint stores the encoder in float16 and in
   // MLX layout; it runs in float32, as the reference does.
   const auto copy_weight = [&](const std::string &name) {

@@ -23,7 +23,7 @@ inline constexpr int kMaxMelFrames = 50 * 300;
 // Speech tokens to mel frames, given the checkpoint's flow.* weights.
 class Flow {
 public:
-  explicit Flow(const qwen3_asr::Checkpoint &checkpoint);
+  explicit Flow(const omni_common::Checkpoint &checkpoint);
 
   // Mel [1, 80, 2 * tokens] of speech tokens [tokens] after a prompt of
   // prompt_tokens with its mel prompt_mel [1, 2 * prompt tokens, 80], in the
@@ -46,7 +46,7 @@ private:
                          const mlx::core::array &timestep_embedding,
                          int block) const;
 
-  const qwen3_asr::Checkpoint &checkpoint_;
+  const omni_common::Checkpoint &checkpoint_;
   mlx::core::array dtype_probe_;
   mlx::core::array noise_;
   mlx::core::array rope_cos_;
@@ -56,7 +56,7 @@ private:
 // Mel frames to samples, given the checkpoint's hifigan.* weights.
 class Hift {
 public:
-  explicit Hift(const qwen3_asr::Checkpoint &checkpoint);
+  explicit Hift(const omni_common::Checkpoint &checkpoint);
 
   // Float32 samples [480 * frames] of mel [1, 80, frames].
   mlx::core::array Decode(const mlx::core::array &mel) const;
@@ -71,7 +71,7 @@ private:
                         int left, int right, int stride = 1,
                         int dilation = 1) const;
 
-  const qwen3_asr::Checkpoint &checkpoint_;
+  const omni_common::Checkpoint &checkpoint_;
   mlx::core::array window_;
   mlx::core::array initial_phases_;
 };

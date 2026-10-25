@@ -14,7 +14,7 @@ namespace cosyvoice3 {
 class SpeakerEncoder {
 public:
   // Reads the checkpoint's campplus.* weights.
-  explicit SpeakerEncoder(const qwen3_asr::Checkpoint &checkpoint);
+  explicit SpeakerEncoder(const omni_common::Checkpoint &checkpoint);
 
   // The speaker embedding of 16 kHz samples, float32 [1, 192].
   mlx::core::array Embed(const std::vector<float> &samples_16k) const;
@@ -28,7 +28,7 @@ private:
   mlx::core::array DenseLayer(const mlx::core::array &x,
                               const std::string &prefix, int dilation) const;
 
-  qwen3_asr::WeightMap weights_;
+  omni_common::WeightMap weights_;
 };
 
 } // namespace cosyvoice3

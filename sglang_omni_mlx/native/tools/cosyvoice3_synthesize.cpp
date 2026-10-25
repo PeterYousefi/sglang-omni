@@ -63,13 +63,13 @@ int main(int argc, char **argv) {
     } else if (argument == "--text") {
       text.text = value;
     } else if (argument == "--instructions") {
-      text.instructions = qwen3_asr::StripUnicodeWhitespace(value);
+      text.instructions = omni_common::StripUnicodeWhitespace(value);
     } else if (argument == "--reference-audio") {
       reference_audio_path = value;
     } else if (argument == "--reference-input") {
       reference_input_path = value;
     } else if (argument == "--reference-text") {
-      text.reference_text = qwen3_asr::StripUnicodeWhitespace(value);
+      text.reference_text = omni_common::StripUnicodeWhitespace(value);
     } else if (argument == "--seed") {
       options.seed = std::stoull(value);
     } else if (argument == "--temperature") {

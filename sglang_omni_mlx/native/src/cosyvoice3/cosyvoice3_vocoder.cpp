@@ -115,7 +115,7 @@ mx::array OverlapAdd(const mx::array &frames) {
 
 } // namespace
 
-Flow::Flow(const qwen3_asr::Checkpoint &checkpoint)
+Flow::Flow(const omni_common::Checkpoint &checkpoint)
     : checkpoint_(checkpoint),
       dtype_probe_(checkpoint.Weight("flow.input_embedding.weight")),
       // Note (yexiaodong): one fixed noise draw, so a request's mel depends
@@ -254,8 +254,8 @@ mx::array Flow::Velocity(const mx::array &x, const mx::array &mu,
   mx::array timestep_embedding = mx::astype(
       mx::concatenate({mx::sin(time_angles), mx::cos(time_angles)}, -1), dtype);
   timestep_embedding = checkpoint_.Linear(
-      qwen3_asr::Silu(checkpoint_.Linear(timestep_embedding,
-                                         kEstimator + "time_embed.time_mlp_0")),
+      omni_common::Silu(checkpoint_.Linear(
+          timestep_embedding, kEstimator + "time_embed.time_mlp_0")),
       kEstimator + "time_embed.time_mlp_2");
 
   const mx::array speakers =
@@ -281,7 +281,7 @@ mx::array Flow::Velocity(const mx::array &x, const mx::array &mu,
     hidden = Block(hidden, timestep_embedding, block);
   }
   const std::vector<mx::array> modulation =
-      mx::split(checkpoint_.Linear(qwen3_asr::Silu(timestep_embedding),
+      mx::split(checkpoint_.Linear(omni_common::Silu(timestep_embedding),
                                    kEstimator + "norm_out.linear"),
                 2, -1);
   hidden =
@@ -302,7 +302,7 @@ mx::array Flow::Block(const mx::array &x, const mx::array &timestep_embedding,
   const int width = x.shape(2);
   // Shift, scale and gate for attention, then for the feed-forward.
   const std::vector<mx::array> modulation =
-      mx::split(checkpoint_.Linear(qwen3_asr::Silu(timestep_embedding),
+      mx::split(checkpoint_.Linear(omni_common::Silu(timestep_embedding),
                                    prefix + "attn_norm.linear"),
                 6, -1);
   const auto modulate = [&](const mx::array &input, int shift, int scale) {
@@ -343,7 +343,7 @@ mx::array Flow::Block(const mx::array &x, const mx::array &timestep_embedding,
                  mx::multiply(mx::expand_dims(modulation[5], 1), feed_forward));
 }
 
-Hift::Hift(const qwen3_asr::Checkpoint &checkpoint)
+Hift::Hift(const omni_common::Checkpoint &checkpoint)
     : checkpoint_(checkpoint), window_(HannWindow()),
       initial_phases_(mx::array(0.0f)) {
   // Note (yexiaodong): the first harmonic starts at phase zero and the

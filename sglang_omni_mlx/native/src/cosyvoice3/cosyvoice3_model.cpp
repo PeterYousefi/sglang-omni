@@ -322,9 +322,9 @@ constexpr const char *kSpecialTokens[] = {
 
 // Note (Jiaxin Deng): lgyStoic's Qwen2 checkpoint mapping and checks; the
 // flow, HiFT and speaker encoder weights keep their stored names.
-qwen3_asr::Checkpoint
+omni_common::Checkpoint
 LoadCheckpoint(const std::filesystem::path &model_directory) {
-  auto config = qwen3_asr::ReadJson(model_directory / "config.json");
+  auto config = omni_common::ReadJson(model_directory / "config.json");
   const auto architecture = config.value("llm", nlohmann::json::object());
   const nlohmann::json expected = {
       {"hidden_size", kHiddenSize},
@@ -370,8 +370,8 @@ LoadCheckpoint(const std::filesystem::path &model_directory) {
     config.erase("quantization");
   }
 
-  qwen3_asr::WeightMap weights;
-  for (auto &[name, tensor] : qwen3_asr::LoadSafetensors(model_directory)) {
+  omni_common::WeightMap weights;
+  for (auto &[name, tensor] : omni_common::LoadSafetensors(model_directory)) {
     std::string mapped_name;
     if (name.starts_with("qwen2.") && !name.ends_with("lm_head.weight")) {
       auto suffix = name.substr(6);
@@ -452,7 +452,7 @@ LoadCheckpoint(const std::filesystem::path &model_directory) {
   require_shape("flow.spk_embed_affine_layer.weight",
                 {kMelBinCount, kSpeakerEmbeddingSize});
   require_shape("hifigan.conv_pre.conv.weight", {512, 5, kMelBinCount});
-  return qwen3_asr::Checkpoint(std::move(weights), config);
+  return omni_common::Checkpoint(std::move(weights), config);
 }
 
 mx::array TokenIds(const std::vector<int> &token_ids, int vocabulary_size) {
@@ -469,9 +469,10 @@ mx::array TokenIds(const std::vector<int> &token_ids, int vocabulary_size) {
 
 // The S3 speech tokenizer v3 checkpoint the model directory holds in
 // speech_tokenizer/.
-qwen3_asr::Checkpoint
+omni_common::Checkpoint
 LoadSpeechTokenizer(const std::filesystem::path &directory) {
-  const nlohmann::json config = qwen3_asr::ReadJson(directory / "config.json");
+  const nlohmann::json config =
+      omni_common::ReadJson(directory / "config.json");
   if (config.value("model_type", std::string()) != "s3_tokenizer_v3" ||
       config.value("n_audio_layer", 0) != 12 ||
       config.value("n_audio_state", 0) != 1280 ||
@@ -481,8 +482,8 @@ LoadSpeechTokenizer(const std::filesystem::path &directory) {
         "speech_tokenizer/ must hold the S3 speech tokenizer v3");
   } else {
   }
-  return qwen3_asr::Checkpoint(qwen3_asr::LoadSafetensors(directory),
-                               nlohmann::json::object());
+  return omni_common::Checkpoint(omni_common::LoadSafetensors(directory),
+                                 nlohmann::json::object());
 }
 
 } // namespace
@@ -492,7 +493,7 @@ CosyVoice3Model::CosyVoice3Model(const std::filesystem::path &model_directory)
       decoder_(checkpoint_, "model",
                {kLayerCount, kAttentionHeadCount, kKeyValueHeadCount,
                 kHeadDimension, kRmsNormEpsilon, kRopeTheta, false, false}),
-      tokenizer_(std::make_unique<qwen3_asr::Tokenizer>(model_directory)),
+      tokenizer_(std::make_unique<omni_common::Tokenizer>(model_directory)),
       flow_(checkpoint_), hift_(checkpoint_), speaker_encoder_(checkpoint_),
       speech_tokenizer_checkpoint_(
           LoadSpeechTokenizer(model_directory / "speech_tokenizer")),

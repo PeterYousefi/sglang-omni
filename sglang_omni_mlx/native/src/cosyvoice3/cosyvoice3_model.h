@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "common/layers.h"
+#include "common/text.h"
 #include "common/tokenizer.h"
 #include "cosyvoice3/cosyvoice3_audio.h"
 #include "cosyvoice3/cosyvoice3_speaker.h"
@@ -132,13 +133,13 @@ private:
   // Ids of text with the checkpoint's special tokens split out.
   std::vector<int> Encode(const std::string &text) const;
 
-  qwen3_asr::Checkpoint checkpoint_;
+  omni_common::Checkpoint checkpoint_;
   qwen3_asr::Qwen3Decoder decoder_;
-  std::unique_ptr<qwen3_asr::Tokenizer> tokenizer_;
+  std::unique_ptr<omni_common::Tokenizer> tokenizer_;
   Flow flow_;
   Hift hift_;
   SpeakerEncoder speaker_encoder_;
-  qwen3_asr::Checkpoint speech_tokenizer_checkpoint_;
+  omni_common::Checkpoint speech_tokenizer_checkpoint_;
   SpeechTokenizer speech_tokenizer_;
 };
 

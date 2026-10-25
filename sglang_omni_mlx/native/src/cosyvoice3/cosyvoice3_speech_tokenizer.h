@@ -14,7 +14,7 @@ namespace cosyvoice3 {
 class SpeechTokenizer {
 public:
   // Reads the S3TokenizerV3 checkpoint's encoder.* and quantizer.* weights.
-  explicit SpeechTokenizer(const qwen3_asr::Checkpoint &checkpoint);
+  explicit SpeechTokenizer(const omni_common::Checkpoint &checkpoint);
 
   // All speech tokens of up to 30 s of 16 kHz samples, int32 [1, tokens].
   mlx::core::array Encode(const std::vector<float> &samples_16k) const;
@@ -23,7 +23,7 @@ private:
   mlx::core::array Block(const mlx::core::array &x, int layer,
                          const mlx::core::array &attention_mask) const;
 
-  const qwen3_asr::Checkpoint &checkpoint_;
+  const omni_common::Checkpoint &checkpoint_;
   // Rotary tables [positions, head dim].
   mlx::core::array rotary_cos_;
   mlx::core::array rotary_sin_;
