@@ -61,7 +61,7 @@ def vocoder() -> Ming3StreamingVocoder:
     )
 
 
-@pytest.mark.parametrize("latent_steps", [1, 8, 9, 16, 17, 39, 66])
+@pytest.mark.parametrize("latent_steps", [1, 5, 8, 9, 16, 17, 39, 66])
 @torch.inference_mode()
 def test_incremental_audio_matches_full_decode_and_flushes_tail(
     vocoder: Ming3StreamingVocoder, latent_steps: int

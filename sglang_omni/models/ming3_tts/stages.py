@@ -404,10 +404,6 @@ def create_tts_engine_executor(
 
     def build_request(payload: StagePayload) -> Ming3TTSRequestData:
         parameters = payload.request.params
-        if dense and parameters.get("stream", False):
-            raise ValueError("Ming 3 0.5B streaming is not supported yet")
-        else:
-            pass
         seed = parameters.get("seed")
         if dense:
             prompt = materialize_dense_prompt(
