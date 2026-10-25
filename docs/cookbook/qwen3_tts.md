@@ -526,7 +526,7 @@ The CustomVoice requests above work unchanged, with the same speakers, `language
 - `response_format` is `wav` or `pcm`; `stream_format` must be `audio`.
 - The prompt and `max_new_tokens` must fit the talker's 8192 positions, as on CUDA: a larger `max_new_tokens` returns 400, and the default 2048 shrinks to fit. `instructions` are at most 4096 characters, and `repetition_penalty` must be above 0.
 - `seed` repeats a request's audio on the same chip and MLX version; it does not reproduce CUDA's audio.
-- A streamed request decodes a first chunk of `initial_codec_chunk_frames` frames (default 5, at most 25), then 25-frame chunks, each with 25 frames of left context; a whole request decodes in the CUDA vocoder's 300-frame chunks. Streamed and whole audio can differ slightly near chunk edges. `stream_codec_output` and `suppress_bootstrap_silence` are checked and then ignored.
+- A streamed request decodes a first chunk of `initial_codec_chunk_frames` frames (default 5, at most 25; `0` starts at 25, as on CUDA), then 25-frame chunks, each with 25 frames of left context; a whole request decodes in the CUDA vocoder's 300-frame chunks. Streamed and whole audio can differ slightly near chunk edges. `stream_codec_output` and `suppress_bootstrap_silence` are checked and then ignored.
 - Started with `--model-name`, it returns 404 for any other `model`; without that flag, `model` is ignored, as on CUDA.
 - Errors are `{"detail": "..."}`.
 - Requests run one at a time and `--max-queued-requests` (default 2) more wait; the rest get 503, and `/health` shows the queue.

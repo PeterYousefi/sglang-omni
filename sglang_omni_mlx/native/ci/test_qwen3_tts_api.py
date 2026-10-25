@@ -234,15 +234,17 @@ def test_qwen3_tts_streams_pcm_while_it_speaks(
         "1",
         "16",
     )
-    chunks = []
-    first_audio_at = None
+    chunks = [response.read1(65536)]
+    first_audio_at = time.monotonic()
+    # The default first chunk is five frames, decoded before the next 25.
+    assert len(chunks[0]) == 5 * FRAME_BYTES
     while chunk := response.read1(65536):
         first_audio_at = first_audio_at or time.monotonic()
         chunks.append(chunk)
     finished_at = time.monotonic()
     pcm = b"".join(chunks)
     assert pcm and len(pcm) % FRAME_BYTES == 0
-    # The first chunk is five frames: it arrives well before the last.
+    # The first chunk arrives well before the last.
     assert first_audio_at - started_at < (finished_at - started_at) / 2
     heard = transcript_words(asr_server, pcm)
     assert word_errors(words(SENTENCE), heard) <= MAX_WORD_ERRORS, heard
@@ -380,15 +382,20 @@ def test_qwen3_tts_takes_null_for_its_optional_fields(
     assert status == 200
 
 
+@pytest.mark.parametrize(
+    ("initial_codec_chunk_frames", "first_chunk_frames"),
+    # 0 starts at the steady 25-frame chunk, as on CUDA.
+    [(2, 2), (0, 25)],
+)
 def test_qwen3_tts_first_streamed_chunk_follows_initial_codec_chunk_frames(
-    qwen3_tts_server: Server,
+    qwen3_tts_server: Server, initial_codec_chunk_frames: int, first_chunk_frames: int
 ) -> None:
     body = {
         "input": SENTENCE,
         "response_format": "pcm",
         "stream": True,
         "seed": 5,
-        "initial_codec_chunk_frames": 2,
+        "initial_codec_chunk_frames": initial_codec_chunk_frames,
     }
     connection = http.client.HTTPConnection(
         "127.0.0.1", qwen3_tts_server.port, timeout=300
@@ -396,9 +403,14 @@ def test_qwen3_tts_first_streamed_chunk_follows_initial_codec_chunk_frames(
     connection.request("POST", "/v1/audio/speech", body=json.dumps(body))
     response = connection.getresponse()
     assert response.status == 200
-    first = response.read1(65536)
+    first = b""
+    while len(first) < first_chunk_frames * FRAME_BYTES:
+        first += response.read1(first_chunk_frames * FRAME_BYTES - len(first))
+    started_waiting = time.monotonic()
+    # Nothing more arrives until the next chunk is decoded.
+    assert response.read1(65536)
+    assert time.monotonic() - started_waiting > 0.2
     response.read()
-    assert len(first) == 2 * FRAME_BYTES
 
 
 def test_qwen3_tts_tiny_top_p_keeps_the_likeliest_code(

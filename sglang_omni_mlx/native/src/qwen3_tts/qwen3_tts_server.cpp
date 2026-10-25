@@ -67,6 +67,7 @@ constexpr size_t kMaxRequestBodyBytes = 1024 * 1024;
 constexpr int kDefaultAudioFrames = 2048;
 constexpr int kTalkerContextPositions = 8192;
 constexpr size_t kMaxInstructionCharacters = 4096;
+constexpr int kDefaultFirstChunkFrames = 5;
 constexpr double kMinSpeed = 0.25;
 constexpr double kMaxSpeed = 4.0;
 constexpr int kRequestIdHexDigits = 32;
@@ -106,7 +107,7 @@ struct SpeechRequest {
   double speed = 1.0;
   int max_frames = kDefaultAudioFrames;
   // A streamed request's first chunk; 0 starts at the steady chunk.
-  int first_chunk_frames = 0;
+  int first_chunk_frames = kDefaultFirstChunkFrames;
 };
 
 // Audio one synthesis hands from the worker thread to its request's thread.
@@ -424,7 +425,8 @@ SpeechRequest ParseRequest(const Json &body,
   }
   const Json initial_chunk =
       FieldOr(body, "initial_codec_chunk_frames", Json());
-  if (initial_chunk.is_number_integer() && initial_chunk.get<int64_t>() > 0) {
+  // Note (Jiaxin Deng): as on CUDA, 0 starts at the steady chunk.
+  if (initial_chunk.is_number_integer() && initial_chunk.get<int64_t>() >= 0) {
     request.first_chunk_frames = static_cast<int>(
         std::min<int64_t>(initial_chunk.get<int64_t>(), INT32_MAX));
   } else {
@@ -933,7 +935,7 @@ private:
                           send(stream.Push(codes));
                         });
     if (result.generated_token_count == 0) {
-      // Note (Jiaxin Deng): CUDA answers no audio output with an error.
+      // Note (Minyi Tang): CUDA answers no audio output with an error.
       throw std::runtime_error("Qwen3-TTS generated no audio codes");
     } else if (cancel.load()) {
       throw qwen3_asr::TranscriptionCancelled();
