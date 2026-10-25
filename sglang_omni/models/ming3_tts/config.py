@@ -41,12 +41,15 @@ def default_stages() -> list[StageConfig]:
                 enable_torch_compile=False,
             ),
             next="vocoder",
+            stream_to=["vocoder"],
         ),
         StageConfig(
             name="vocoder",
             process="vocoder",
             gpu=0,
             factory_path=f"{PACKAGE}.stages.create_vocoder_executor",
+            factory=FactoryArgs(stream_chunk_steps=8),
+            can_accept_stream_before_payload=True,
             terminal=True,
         ),
     ]

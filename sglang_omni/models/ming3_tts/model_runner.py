@@ -21,9 +21,10 @@ from sglang_omni.models.ming3_tts.sglang_model import (
     AcousticInputs,
     Ming3TTSModel,
 )
+from sglang_omni.scheduling.message import OutgoingMessage
 from sglang_omni.scheduling.sglang_backend.output_processor import SGLangOutputProcessor
 from sglang_omni.scheduling.sglang_backend.request_data import SGLangARRequestData
-from sglang_omni.scheduling.types import SchedulerRequest
+from sglang_omni.scheduling.types import RequestOutput, SchedulerRequest
 
 
 @dataclass(kw_only=True)
@@ -40,6 +41,31 @@ class Ming3TTSRequestData(SGLangARRequestData):
     zero_speaker: bool = False
     prompt_latents: torch.Tensor | None = None
     latent_position: int = -1
+    emitted_latent_steps: int = 0
+
+
+def build_stream_output(
+    request_id: str,
+    request: Ming3TTSRequestData,
+    output: RequestOutput,
+) -> list[OutgoingMessage]:
+    """Transfer each generated latent once, independently of the final payload."""
+    if not request.stage_payload.request.params.get("stream", False):
+        return []
+    else:
+        pass
+    messages = [
+        OutgoingMessage(
+            request_id=request_id,
+            type="stream",
+            target="vocoder",
+            data=latent.detach().to(device="cpu", dtype=torch.float32).clone(),
+            metadata={"modality": "audio_latents", "stream": True},
+        )
+        for latent in request.latents[request.emitted_latent_steps :]
+    ]
+    request.emitted_latent_steps = len(request.latents)
+    return messages
 
 
 @dataclass(frozen=True, kw_only=True)

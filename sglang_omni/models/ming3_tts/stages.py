@@ -33,6 +33,7 @@ from sglang_omni.models.ming3_tts.model_runner import (
     Ming3TTSModelRunner,
     Ming3TTSRequestData,
     StopPolicy,
+    build_stream_output,
 )
 from sglang_omni.models.ming3_tts.sglang_model import (
     VOCODER_WEIGHT_PREFIX,
@@ -41,6 +42,7 @@ from sglang_omni.models.ming3_tts.sglang_model import (
     Ming3TTSConfig,
     Ming3TTSModel,
 )
+from sglang_omni.models.ming3_tts.streaming_vocoder import Ming3StreamingVocoder
 from sglang_omni.modules.ming_audio.vae.configuration_audio_vae import AudioVAEconfig
 from sglang_omni.modules.ming_audio.vae.modeling_audio_vae import AudioVAE
 from sglang_omni.proto.request import StagePayload
@@ -402,6 +404,10 @@ def create_tts_engine_executor(
 
     def build_request(payload: StagePayload) -> Ming3TTSRequestData:
         parameters = payload.request.params
+        if dense and parameters.get("stream", False):
+            raise ValueError("Ming 3 0.5B streaming is not supported yet")
+        else:
+            pass
         seed = parameters.get("seed")
         if dense:
             prompt = materialize_dense_prompt(
@@ -472,12 +478,15 @@ def create_tts_engine_executor(
     def build_result(request: Ming3TTSRequestData) -> StagePayload:
         payload = request.stage_payload
         payload.data = {
-            "latents": torch.stack(request.latents).float().cpu(),
             "usage": {
                 "prompt_tokens": len(request.input_ids),
                 "completion_tokens": len(request.output_ids),
             },
         }
+        if not payload.request.params.get("stream", False):
+            payload.data["latents"] = torch.stack(request.latents).float().cpu()
+        else:
+            pass
         return payload
 
     stop_policy = StopPolicy(
@@ -503,6 +512,7 @@ def create_tts_engine_executor(
         model_runner=model_runner,
         request_builder=build_request,
         result_adapter=build_result,
+        stream_output_builder=build_stream_output,
         enable_async_decode=False,
     )
 
@@ -510,9 +520,10 @@ def create_tts_engine_executor(
 def create_vocoder_executor(
     model_path: str,
     *,
+    stream_chunk_steps: int,
     device: str | None = None,
     gpu_id: int | None = None,
-) -> SimpleScheduler:
+) -> Ming3StreamingVocoder:
     resolved_device = resolve_concrete_device(device, gpu_id)
     checkpoint = Path(resolve_checkpoint(model_path))
     vae, sample_rate = load_audio_vae(checkpoint, resolved_device)
@@ -531,4 +542,9 @@ def create_vocoder_executor(
         payload.data["usage"] = usage
         return payload
 
-    return SimpleScheduler(decode)
+    return Ming3StreamingVocoder(
+        decode,
+        vae=vae,
+        sample_rate=sample_rate,
+        stream_chunk_steps=stream_chunk_steps,
+    )
