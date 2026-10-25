@@ -46,6 +46,7 @@
 
 #include "civetweb.h"
 #include "common/http.h"
+#include "common/text.h"
 #include "qwen3_asr/asr_service.h"
 #include "qwen3_asr/qwen3_asr_transcriber.h"
 #include "qwen3_tts/qwen3_tts_model.h"
@@ -288,7 +289,7 @@ SpeechRequest ParseRequest(const Json &body,
   }
   const Json input = FieldOr(body, "input", Json());
   if (!input.is_string() ||
-      qwen3_asr::StripUnicodeWhitespace(input.get<std::string>()).empty()) {
+      omni_common::StripUnicodeWhitespace(input.get<std::string>()).empty()) {
     throw std::invalid_argument("input must be a non-empty string");
   } else {
   }
@@ -307,7 +308,7 @@ SpeechRequest ParseRequest(const Json &body,
   } else {
   }
   // Note (Minyi Tang): as CUDA's response_format.strip().lower().
-  for (const char character : qwen3_asr::StripUnicodeWhitespace(
+  for (const char character : omni_common::StripUnicodeWhitespace(
            PresentFieldOr(body, "response_format", Json("wav"))
                .get<std::string>())) {
     request.response_format.push_back(
@@ -332,7 +333,7 @@ SpeechRequest ParseRequest(const Json &body,
   if (task_type.is_string()) {
     std::string normalized;
     for (const char character :
-         qwen3_asr::StripUnicodeWhitespace(task_type.get<std::string>())) {
+         omni_common::StripUnicodeWhitespace(task_type.get<std::string>())) {
       if (character != '_' && character != '-') {
         normalized.push_back(static_cast<char>(
             std::tolower(static_cast<unsigned char>(character))));
@@ -369,7 +370,7 @@ SpeechRequest ParseRequest(const Json &body,
   } else {
   }
   const std::string voice = voice_field.get<std::string>();
-  std::string speaker = Lower(qwen3_asr::StripUnicodeWhitespace(voice));
+  std::string speaker = Lower(omni_common::StripUnicodeWhitespace(voice));
   if (speaker.empty() || speaker == "default") {
     speaker = kDefaultSpeaker;
   } else if (model.speaker_ids().count(speaker) == 0) {
@@ -385,7 +386,7 @@ SpeechRequest ParseRequest(const Json &body,
   const Json language_field = FieldOr(body, "language", Json());
   if (language_field.is_string()) {
     language = Lower(
-        qwen3_asr::StripUnicodeWhitespace(language_field.get<std::string>()));
+        omni_common::StripUnicodeWhitespace(language_field.get<std::string>()));
     const bool known =
         std::any_of(kLanguages.begin(), kLanguages.end(),
                     [&](const char *name) { return Lower(name) == language; });
@@ -469,7 +470,7 @@ SpeechRequest ParseRequest(const Json &body,
   } else {
   }
 
-  const std::string instructions = qwen3_asr::StripUnicodeWhitespace(
+  const std::string instructions = omni_common::StripUnicodeWhitespace(
       FieldOr(body, "instructions", Json("")).get<std::string>());
   if (CharacterCount(instructions) > kMaxInstructionCharacters) {
     throw std::invalid_argument("instructions must be at most " +

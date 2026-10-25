@@ -27,10 +27,10 @@ public:
   int codebook_count() const { return codebook_count_; }
 
 private:
-  SpeechDecoder(const nlohmann::json &config, qwen3_asr::WeightMap weights);
+  SpeechDecoder(const nlohmann::json &config, omni_common::WeightMap weights);
   // Codebook embeddings from their usage counts, and convolution kernels in
   // MLX's layout.
-  static qwen3_asr::WeightMap PrepareWeights(qwen3_asr::WeightMap weights);
+  static omni_common::WeightMap PrepareWeights(omni_common::WeightMap weights);
   mlx::core::array TransformerLayer(const mlx::core::array &x, int layer,
                                     const mlx::core::array &cosines,
                                     const mlx::core::array &sines,
@@ -48,7 +48,7 @@ private:
                                          const std::string &prefix,
                                          int stride) const;
 
-  qwen3_asr::Checkpoint checkpoint_;
+  omni_common::Checkpoint checkpoint_;
   int codebook_count_;
   int semantic_codebook_count_;
   int head_count_;

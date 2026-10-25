@@ -139,11 +139,11 @@ qwen3_asr::Qwen3DecoderConfig DecoderConfig(const nlohmann::json &config) {
 
 Qwen3TtsModel::Qwen3TtsModel(const std::filesystem::path &model_directory)
     : Qwen3TtsModel(model_directory,
-                    qwen3_asr::ReadJson(model_directory / "config.json")) {}
+                    omni_common::ReadJson(model_directory / "config.json")) {}
 
 Qwen3TtsModel::Qwen3TtsModel(const std::filesystem::path &model_directory,
                              const nlohmann::json &config)
-    : checkpoint_(qwen3_asr::LoadSafetensors(model_directory), config),
+    : checkpoint_(omni_common::LoadSafetensors(model_directory), config),
       tokenizer_(model_directory),
       speech_decoder_(model_directory / "speech_tokenizer"),
       talker_(checkpoint_, kTalkerPrefix,
@@ -287,7 +287,7 @@ mx::array Qwen3TtsModel::EmbedText(const std::vector<int> &ids) const {
   const mx::array embedded = checkpoint_.Embed(
       mx::array(ids.begin(), {1, static_cast<int>(ids.size())}, mx::int32),
       std::string(kTalkerPrefix) + ".text_embedding");
-  return checkpoint_.Linear(qwen3_asr::Silu(checkpoint_.Linear(
+  return checkpoint_.Linear(omni_common::Silu(checkpoint_.Linear(
                                 embedded, "talker.text_projection.linear_fc1")),
                             "talker.text_projection.linear_fc2");
 }

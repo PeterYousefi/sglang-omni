@@ -45,9 +45,9 @@ bool EndsWith(const std::string &text, const std::string &suffix) {
 
 } // namespace
 
-qwen3_asr::WeightMap
-SpeechDecoder::PrepareWeights(qwen3_asr::WeightMap weights) {
-  qwen3_asr::WeightMap prepared;
+omni_common::WeightMap
+SpeechDecoder::PrepareWeights(omni_common::WeightMap weights) {
+  omni_common::WeightMap prepared;
   const std::string usage_suffix = "._codebook.cluster_usage";
   for (auto &[name, array] : weights) {
     if (name.rfind(std::string(kPrefix) + ".", 0) != 0) {
@@ -86,11 +86,11 @@ SpeechDecoder::PrepareWeights(qwen3_asr::WeightMap weights) {
 SpeechDecoder::SpeechDecoder(
     const std::filesystem::path &speech_tokenizer_directory)
     : SpeechDecoder(
-          qwen3_asr::ReadJson(speech_tokenizer_directory / "config.json"),
-          qwen3_asr::LoadSafetensors(speech_tokenizer_directory)) {}
+          omni_common::ReadJson(speech_tokenizer_directory / "config.json"),
+          omni_common::LoadSafetensors(speech_tokenizer_directory)) {}
 
 SpeechDecoder::SpeechDecoder(const nlohmann::json &config,
-                             qwen3_asr::WeightMap weights)
+                             omni_common::WeightMap weights)
     : checkpoint_(PrepareWeights(std::move(weights)), nlohmann::json::object()),
       inverse_frequencies_(0.0f) {
   const nlohmann::json &decoder = config.at("decoder_config");
@@ -207,7 +207,7 @@ mx::array SpeechDecoder::TransformerLayer(const mx::array &x, int layer,
   const mx::array mlp_input =
       RmsNorm(hidden, prefix + ".post_attention_layernorm");
   const mx::array mlp_output = checkpoint_.Linear(
-      mx::multiply(qwen3_asr::Silu(checkpoint_.Linear(
+      mx::multiply(omni_common::Silu(checkpoint_.Linear(
                        mlp_input, prefix + ".mlp.gate_proj")),
                    checkpoint_.Linear(mlp_input, prefix + ".mlp.up_proj")),
       prefix + ".mlp.down_proj");
@@ -287,7 +287,7 @@ mx::array SpeechDecoder::Decode(const mx::array &codes) const {
     mx::array x =
         CausalConvolution(hidden, block + ".dwconv.conv", 1, hidden.shape(2));
     x = checkpoint_.LayerNorm(x, block + ".norm", kConvNextNormEps);
-    x = qwen3_asr::Gelu(checkpoint_.Linear(x, block + ".pwconv1"));
+    x = omni_common::Gelu(checkpoint_.Linear(x, block + ".pwconv1"));
     x = checkpoint_.Linear(x, block + ".pwconv2");
     hidden = mx::add(residual,
                      mx::multiply(checkpoint_.Weight(block + ".gamma"), x));

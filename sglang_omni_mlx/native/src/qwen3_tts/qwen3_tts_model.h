@@ -106,8 +106,8 @@ private:
   // The codec ids before the text: thinking, language, speaker, pad, start.
   std::vector<int> CodecPrefixIds(const SpeechPrompt &prompt) const;
 
-  qwen3_asr::Checkpoint checkpoint_;
-  qwen3_asr::Tokenizer tokenizer_;
+  omni_common::Checkpoint checkpoint_;
+  omni_common::Tokenizer tokenizer_;
   SpeechDecoder speech_decoder_;
   qwen3_asr::Qwen3Decoder talker_;
   qwen3_asr::Qwen3Decoder code_predictor_;
