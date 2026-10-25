@@ -104,6 +104,8 @@ struct SpeechRequest {
   bool stream = false;
   double speed = 1.0;
   int max_frames = kDefaultAudioFrames;
+  // A streamed request's first chunk; 0 starts at the steady chunk.
+  int first_chunk_frames = 0;
 };
 
 // Audio one synthesis hands from the worker thread to its request's thread.
@@ -419,6 +421,13 @@ SpeechRequest ParseRequest(const Json &body,
     } else {
     }
   }
+  const Json initial_chunk =
+      FieldOr(body, "initial_codec_chunk_frames", Json());
+  if (initial_chunk.is_number_integer() && initial_chunk.get<int64_t>() > 0) {
+    request.first_chunk_frames = static_cast<int>(
+        std::min<int64_t>(initial_chunk.get<int64_t>(), INT32_MAX));
+  } else {
+  }
   for (const char *field : {"initial_codec_chunk_frames", "seed"}) {
     const Json value = FieldOr(body, field, Json());
     if (value.is_number_integer() && !value.is_number_unsigned() &&
@@ -673,7 +682,14 @@ public:
 
 private:
   static int HandleSpeech(mg_connection *connection, void *data) {
-    return static_cast<Qwen3TtsService *>(data)->Speak(connection);
+    // Note (Jiaxin Deng): nothing may unwind through civetweb's C callback;
+    // what the handler does not answer itself ends the connection.
+    try {
+      return static_cast<Qwen3TtsService *>(data)->Speak(connection);
+    } catch (const std::exception &failure) {
+      std::cerr << "speech request failed: " << typeid(failure).name() << "\n";
+      return 500;
+    }
   }
 
   int Speak(mg_connection *connection) {
@@ -713,6 +729,11 @@ private:
           connection, 404, {{"detail", "Unknown model: " + *request.model}});
     } else {
     }
+    const auto deadline = std::chrono::steady_clock::now() + request_timeout_;
+    const std::string request_id = NewRequestId();
+    const int sample_rate = model_.speech_decoder().sample_rate();
+    auto channel = std::make_shared<AudioChannel>();
+    const qwen3_asr::CancelFlag cancel = qwen3_asr::NewCancelFlag();
     bool admitted = false;
     {
       std::lock_guard<std::mutex> lock(admission_mutex_);
@@ -724,34 +745,17 @@ private:
                                     {{"detail", "The request queue is full."}});
     } else {
     }
-
-    const auto deadline = std::chrono::steady_clock::now() + request_timeout_;
-    const std::string request_id = NewRequestId();
-    const int sample_rate = model_.speech_decoder().sample_rate();
-    auto channel = std::make_shared<AudioChannel>();
-    const qwen3_asr::CancelFlag cancel = qwen3_asr::NewCancelFlag();
-    worker_->Submit(
-        [this, request, channel, deadline](const std::atomic<bool> &cancelled) {
-          return Synthesize(request, *channel, cancelled, deadline);
-        },
-        cancel,
-        [this, channel](std::optional<TranscriptionResult> result,
-                        std::exception_ptr error) {
-          // Note (Minyi Tang): the slot frees before the response can end, so
-          // a client's next request is never refused for its previous one.
-          {
-            std::lock_guard<std::mutex> lock(admission_mutex_);
-            --admitted_requests_;
-          }
-          std::lock_guard<std::mutex> lock(channel->mutex);
-          channel->done = true;
-          channel->error = error;
-          if (result.has_value()) {
-            channel->result = std::move(*result);
-          } else {
-          }
-          channel->ready.notify_all();
-        });
+    try {
+      Submit(request, channel, cancel, deadline);
+    } catch (const std::exception &) {
+      // The worker never took the request, so its slot is freed here.
+      {
+        std::lock_guard<std::mutex> lock(admission_mutex_);
+        --admitted_requests_;
+      }
+      return omni_server::WriteJson(connection, 500,
+                                    {{"detail", "Speech generation failed."}});
+    }
     if (request.stream) {
       mg_printf(connection,
                 "HTTP/1.1 200 OK\r\nContent-Type: audio/pcm\r\n"
@@ -870,11 +874,41 @@ private:
     return 200;
   }
 
+  // Hands request to the worker, whose completion frees its admission slot.
+  void Submit(const SpeechRequest &request,
+              const std::shared_ptr<AudioChannel> &channel,
+              const qwen3_asr::CancelFlag &cancel,
+              std::chrono::steady_clock::time_point deadline) {
+    worker_->Submit(
+        [this, request, channel, deadline](const std::atomic<bool> &cancelled) {
+          return Synthesize(request, *channel, cancelled, deadline);
+        },
+        cancel,
+        [this, channel](std::optional<TranscriptionResult> result,
+                        std::exception_ptr error) {
+          // Note (Minyi Tang): the slot frees before the response can end, so
+          // a client's next request is never refused for its previous one.
+          {
+            std::lock_guard<std::mutex> lock(admission_mutex_);
+            --admitted_requests_;
+          }
+          std::lock_guard<std::mutex> lock(channel->mutex);
+          channel->done = true;
+          channel->error = error;
+          if (result.has_value()) {
+            channel->result = std::move(*result);
+          } else {
+          }
+          channel->ready.notify_all();
+        });
+  }
+
   TranscriptionResult
   Synthesize(const SpeechRequest &request, AudioChannel &channel,
              const std::atomic<bool> &cancel,
              std::chrono::steady_clock::time_point deadline) const {
-    qwen3_tts::SpeechStream stream(model_.speech_decoder(), request.stream);
+    qwen3_tts::SpeechStream stream(model_.speech_decoder(), request.stream,
+                                   request.first_chunk_frames);
     const auto send = [&channel](std::vector<float> samples) {
       if (!samples.empty()) {
         std::lock_guard<std::mutex> lock(channel.mutex);
@@ -906,7 +940,17 @@ private:
       throw DeadlineReached();
     } else {
     }
-    send(stream.Finish());
+    std::vector<float> remaining = stream.Finish();
+    if (cancel.load()) {
+      throw qwen3_asr::TranscriptionCancelled();
+    } else if (std::chrono::steady_clock::now() >= deadline) {
+      throw DeadlineReached();
+    } else if (!request.stream && remaining.empty()) {
+      // Note (Jiaxin Deng): CUDA answers a decode with no audio as a failure.
+      throw std::runtime_error("Qwen3-TTS decoded no audio");
+    } else {
+    }
+    send(std::move(remaining));
     return result;
   }
 

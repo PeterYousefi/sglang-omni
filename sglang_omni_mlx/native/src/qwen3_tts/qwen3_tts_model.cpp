@@ -105,9 +105,12 @@ mx::array Sample(mx::array logits, const SamplerConfig &sampler,
         mx::reshape(mx::arange(vocabulary_size, sorted_ids.dtype()),
                     {1, vocabulary_size}),
         -1);
-    const mx::array kept =
+    // Note (Jiaxin Deng): the likeliest token always stays, as CUDA's sampler
+    // keeps it, even where 1 - top_p rounds to 1.
+    const mx::array kept = mx::logical_or(
         mx::greater(mx::take_along_axis(cumulative, inverse_ids, -1),
-                    mx::array(1.0f - sampler.top_p, dtype));
+                    mx::array(1.0f - sampler.top_p, dtype)),
+        mx::equal(log_probabilities, mx::max(log_probabilities, -1, true)));
     logits = mx::where(
         mx::equal(mx::where(kept, log_probabilities, negative_infinity),
                   negative_infinity),
@@ -188,7 +191,7 @@ Qwen3TtsModel::Qwen3TtsModel(const std::filesystem::path &model_directory,
   }
   for (const auto &[name, dialect] : talker.at("spk_is_dialect").items()) {
     if (dialect.is_string()) {
-      speaker_dialects_.emplace(Lower(name), dialect.get<std::string>());
+      speaker_dialects_.emplace(Lower(name), Lower(dialect.get<std::string>()));
     } else {
     }
   }

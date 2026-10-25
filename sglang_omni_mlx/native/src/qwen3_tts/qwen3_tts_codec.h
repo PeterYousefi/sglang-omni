@@ -66,13 +66,15 @@ private:
 
 // Frames decoded in chunks, each with up to 25 frames of left context.
 // Note (Jiaxin Deng): a whole request decodes in the CUDA vocoder's 300-frame
-// chunks and returns every sample at Finish; a streamed one decodes a 5-frame
-// chunk, then 25-frame chunks, so its first audio comes early and its samples
-// differ only near chunk edges.
+// chunks and returns every sample at Finish; a streamed one decodes a first
+// chunk (5 frames by default), then 25-frame chunks, so its first audio comes
+// early and its samples differ only near chunk edges.
 class SpeechStream {
 public:
-  SpeechStream(const SpeechDecoder &decoder, bool streamed)
-      : decoder_(decoder), streamed_(streamed) {}
+  // first_chunk_frames sets a streamed request's first chunk, at most the
+  // steady chunk; 0 starts at the steady chunk.
+  SpeechStream(const SpeechDecoder &decoder, bool streamed,
+               int first_chunk_frames = 5);
 
   // Adds one frame's codes [codebooks]; returns the samples a completed
   // chunk adds, empty until one does.
@@ -86,6 +88,7 @@ private:
 
   const SpeechDecoder &decoder_;
   const bool streamed_;
+  const int first_chunk_frames_;
   std::vector<mlx::core::array> frames_;
   int emitted_frames_ = 0;
   // Frames whose first code is not 0.

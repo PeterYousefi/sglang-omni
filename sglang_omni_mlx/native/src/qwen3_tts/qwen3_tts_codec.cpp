@@ -23,7 +23,6 @@ constexpr std::array<int, 3> kResidualDilations = {1, 3, 9};
 // chunks, each with up to 25 frames of left context.
 constexpr int kChunkFrames = 300;
 constexpr int kLeftContextFrames = 25;
-constexpr int kFirstStreamedChunkFrames = 5;
 constexpr int kStreamedChunkFrames = 25;
 
 // The other half of each head, the first half negated.
@@ -319,11 +318,19 @@ mx::array SpeechDecoder::Decode(const mx::array &codes) const {
   return mx::reshape(mx::clip(wave, mx::array(-1.0f), mx::array(1.0f)), {-1});
 }
 
+SpeechStream::SpeechStream(const SpeechDecoder &decoder, bool streamed,
+                           int first_chunk_frames)
+    : decoder_(decoder), streamed_(streamed),
+      first_chunk_frames_(
+          first_chunk_frames > 0
+              ? std::min(first_chunk_frames, kStreamedChunkFrames)
+              : kStreamedChunkFrames) {}
+
 int SpeechStream::ChunkFrames() const {
   if (!streamed_) {
     return kChunkFrames;
   } else if (emitted_frames_ == 0) {
-    return kFirstStreamedChunkFrames;
+    return first_chunk_frames_;
   } else {
     return kStreamedChunkFrames;
   }
@@ -359,7 +366,7 @@ std::vector<float> SpeechStream::Finish() {
   // keeps one frame of samples per frame whose first code is not 0.
   const size_t kept_samples =
       static_cast<size_t>(voiced_frames_) * decoder_.samples_per_frame();
-  if (!streamed_ && voiced_frames_ > 0 && kept_samples < samples.size()) {
+  if (!streamed_ && kept_samples < samples.size()) {
     samples.resize(kept_samples);
   } else {
   }

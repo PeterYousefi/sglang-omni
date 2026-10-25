@@ -380,6 +380,46 @@ def test_qwen3_tts_takes_null_for_its_optional_fields(
     assert status == 200
 
 
+def test_qwen3_tts_first_streamed_chunk_follows_initial_codec_chunk_frames(
+    qwen3_tts_server: Server,
+) -> None:
+    body = {
+        "input": SENTENCE,
+        "response_format": "pcm",
+        "stream": True,
+        "seed": 5,
+        "initial_codec_chunk_frames": 2,
+    }
+    connection = http.client.HTTPConnection(
+        "127.0.0.1", qwen3_tts_server.port, timeout=300
+    )
+    connection.request("POST", "/v1/audio/speech", body=json.dumps(body))
+    response = connection.getresponse()
+    assert response.status == 200
+    first = response.read1(65536)
+    response.read()
+    assert len(first) == 2 * FRAME_BYTES
+
+
+def test_qwen3_tts_tiny_top_p_keeps_the_likeliest_code(
+    qwen3_tts_server: Server,
+) -> None:
+    """A top_p whose 1 - top_p rounds to 1 still keeps the likeliest code, so
+    it samples as greedy decoding chooses."""
+    body = {"input": "hello", "response_format": "pcm", "max_new_tokens": 8}
+    engine = {"subtalker_dosample": False}
+    status, _, nucleus = speak(
+        qwen3_tts_server,
+        {**body, "top_p": 1e-12, "stage_params": {"tts_engine": engine}},
+    )
+    status_greedy, _, greedy = speak(
+        qwen3_tts_server,
+        {**body, "stage_params": {"tts_engine": {**engine, "do_sample": False}}},
+    )
+    assert status == status_greedy == 200
+    assert nucleus == greedy
+
+
 def test_qwen3_tts_seed_repeats_its_audio(qwen3_tts_server: Server) -> None:
     body = {"input": SENTENCE, "response_format": "pcm", "seed": 7}
     first = speak(qwen3_tts_server, body)
