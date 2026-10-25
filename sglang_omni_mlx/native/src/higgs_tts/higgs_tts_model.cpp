@@ -81,7 +81,7 @@ HiggsTtsModel::LoadWeights(const std::filesystem::path &directory,
   const std::string layer_prefix = kCheckpointLayerPrefix;
   const std::string decoder_prefix = kDecoderPrefix;
   LoadedWeights weights;
-  qwen3_asr::WeightMap loaded = qwen3_asr::LoadSafetensors(directory);
+  omni_common::WeightMap loaded = omni_common::LoadSafetensors(directory);
   // Note (Jiaxin Deng): each entry leaves the loaded map as it is read, so a
   // bfloat16 tensor quantized below is freed instead of staying resident.
   for (auto entry = loaded.begin(); entry != loaded.end();
@@ -131,10 +131,10 @@ HiggsTtsModel::LoadWeights(const std::filesystem::path &directory,
 HiggsTtsModel::HiggsTtsModel(const std::filesystem::path &model_directory,
                              int quantize_bits)
     : HiggsTtsModel(
-          model_directory, qwen3_asr::ReadJson(model_directory / "config.json"),
-          quantize_bits,
+          model_directory,
+          omni_common::ReadJson(model_directory / "config.json"), quantize_bits,
           LoadWeights(model_directory,
-                      qwen3_asr::ReadJson(model_directory / "config.json"),
+                      omni_common::ReadJson(model_directory / "config.json"),
                       quantize_bits)) {}
 
 HiggsTtsModel::HiggsTtsModel(const std::filesystem::path &model_directory,

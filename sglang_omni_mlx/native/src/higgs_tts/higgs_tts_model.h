@@ -58,8 +58,8 @@ public:
 
 private:
   struct LoadedWeights {
-    qwen3_asr::WeightMap model;
-    qwen3_asr::WeightMap codec;
+    omni_common::WeightMap model;
+    omni_common::WeightMap codec;
   };
 
   HiggsTtsModel(const std::filesystem::path &model_directory,
@@ -79,9 +79,9 @@ private:
   // The sum of a row's codebook embeddings, [1, 1, hidden].
   mlx::core::array EmbedRow(const mlx::core::array &codes) const;
 
-  qwen3_asr::Checkpoint checkpoint_;
+  omni_common::Checkpoint checkpoint_;
   AudioCodec codec_;
-  qwen3_asr::Tokenizer tokenizer_;
+  omni_common::Tokenizer tokenizer_;
   qwen3_asr::Qwen3Decoder decoder_;
   float norm_eps_;
   int tts_token_id_;

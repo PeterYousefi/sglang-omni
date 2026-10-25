@@ -48,6 +48,7 @@
 
 #include "civetweb.h"
 #include "common/http.h"
+#include "common/text.h"
 #include "higgs_tts/higgs_tts_model.h"
 #include "qwen3_asr/asr_service.h"
 #include "qwen3_asr/qwen3_asr_transcriber.h"
@@ -239,7 +240,7 @@ SpeechRequest ParseRequest(const Json &body,
   RejectUnsupportedFields(body);
   const Json input = FieldOr(body, "input", Json());
   if (!input.is_string() ||
-      qwen3_asr::StripUnicodeWhitespace(input.get<std::string>()).empty()) {
+      omni_common::StripUnicodeWhitespace(input.get<std::string>()).empty()) {
     throw std::invalid_argument("input must be a non-empty string");
   } else {
   }
@@ -283,8 +284,8 @@ SpeechRequest ParseRequest(const Json &body,
   } else {
   }
   // Note (Minyi Tang): as CUDA's response_format.strip().lower().
-  for (const char character :
-       qwen3_asr::StripUnicodeWhitespace(response_format.get<std::string>())) {
+  for (const char character : omni_common::StripUnicodeWhitespace(
+           response_format.get<std::string>())) {
     request.response_format.push_back(
         static_cast<char>(std::tolower(static_cast<unsigned char>(character))));
   }

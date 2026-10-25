@@ -23,7 +23,7 @@ class AudioCodec {
 public:
   // weights are the codec's tensors with the checkpoint's codec prefix
   // removed, as stored (PyTorch layouts).
-  explicit AudioCodec(qwen3_asr::WeightMap weights);
+  explicit AudioCodec(omni_common::WeightMap weights);
 
   // Raw codec frames [frames, codebooks] int32, each code below
   // kCodecEntryCount, to float32 samples [frames * samples_per_frame].
@@ -32,11 +32,11 @@ public:
   int sample_rate() const;
 
 private:
-  static qwen3_asr::WeightMap PrepareWeights(qwen3_asr::WeightMap weights);
+  static omni_common::WeightMap PrepareWeights(omni_common::WeightMap weights);
   mlx::core::array ResidualUnit(const mlx::core::array &x,
                                 const std::string &prefix, int dilation) const;
 
-  qwen3_asr::Checkpoint checkpoint_;
+  omni_common::Checkpoint checkpoint_;
 };
 
 // Delayed rows [rows, codebooks] to raw frames [rows - codebooks + 1,

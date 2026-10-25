@@ -33,7 +33,7 @@ mx::array Snake(const mx::array &x, const mx::array &alpha) {
 
 } // namespace
 
-AudioCodec::AudioCodec(qwen3_asr::WeightMap weights)
+AudioCodec::AudioCodec(omni_common::WeightMap weights)
     : checkpoint_(PrepareWeights(std::move(weights)),
                   nlohmann::json::object()) {}
 
@@ -47,8 +47,9 @@ int AudioCodec::samples_per_frame() const {
 
 int AudioCodec::sample_rate() const { return kSampleRate; }
 
-qwen3_asr::WeightMap AudioCodec::PrepareWeights(qwen3_asr::WeightMap weights) {
-  qwen3_asr::WeightMap prepared;
+omni_common::WeightMap
+AudioCodec::PrepareWeights(omni_common::WeightMap weights) {
+  omni_common::WeightMap prepared;
   for (auto &[name, weight] : weights) {
     const bool is_decoder =
         name.rfind(std::string(kDecoderPrefix) + ".", 0) == 0;
