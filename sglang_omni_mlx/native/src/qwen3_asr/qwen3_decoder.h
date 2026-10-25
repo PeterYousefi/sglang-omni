@@ -50,7 +50,7 @@ class Qwen3Decoder {
 public:
   // Weights under prefix (layers, norm, embed_tokens); the output projection
   // is the tied embedding table.
-  Qwen3Decoder(const Checkpoint &checkpoint, std::string prefix,
+  Qwen3Decoder(const omni_common::Checkpoint &checkpoint, std::string prefix,
                Qwen3DecoderConfig config);
 
   // Token ids [1, length] to embeddings [1, length, hidden].
@@ -76,7 +76,7 @@ private:
                          const std::optional<RotaryInputs> &rotary) const;
   RotaryInputs Rotary(int length, int offset, mlx::core::Dtype dtype) const;
 
-  const Checkpoint &checkpoint_;
+  const omni_common::Checkpoint &checkpoint_;
   std::string prefix_;
   Qwen3DecoderConfig config_;
 };
