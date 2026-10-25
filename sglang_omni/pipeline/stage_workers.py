@@ -770,7 +770,8 @@ def run_process(
 
     def report_failure(exc: BaseException) -> None:
         nonlocal failure_reported
-        if failure_reported:
+        # note (Richard Wang): an orderly SIGINT stop raises KeyboardInterrupt or asyncio cancellation here, so only an Exception is a stage failure.
+        if failure_reported or not isinstance(exc, Exception):
             return
         else:
             pass

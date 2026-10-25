@@ -1,9 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """Resolve typed stage config groups into stage factory kwargs.
 
-Factory kwargs combine declared fallbacks, pipeline wiring, and typed config:
+Factory kwargs for a stage come from exactly two sources:
 
-* FactoryDefault metadata supplies fallback values for typed factory fields.
 * :meth:`PipelineConfig.stage_factory_kwargs` — wiring the pipeline author
   passes to the factory in code. Not a configuration path.
 * the stage's typed consumer groups — ``factory.*`` fields pass through
@@ -13,7 +12,7 @@ Factory kwargs combine declared fallbacks, pipeline wiring, and typed config:
   an error, because the value the user set would otherwise be dropped on the
   floor.
 
-The parent process resolves these without importing the factory; the stage
+The parent process resolves both without importing the factory; the stage
 worker overlays them against the factory's signature just before calling it
 (:func:`apply_typed_stage_kwargs`), and injects the standard placement
 kwargs only when the factory declares them
@@ -27,7 +26,6 @@ from collections.abc import Callable, Mapping
 
 from sglang_omni.config.schema import (
     PLACEMENT_OWNED_FACTORY_KWARGS,
-    FactoryDefault,
     PipelineConfig,
     StageConfig,
     parse_replica_instance_name,
@@ -47,16 +45,10 @@ def resolve_stage_factory_kwargs(
     stage_cfg: StageConfig,
     global_cfg: PipelineConfig,
 ) -> dict[str, object]:
-    """Apply declared fallbacks before the pipeline author's constructor kwargs."""
+    """Return the pipeline author's constructor kwargs for one stage."""
 
     logical_stage_name, _ = parse_replica_instance_name(stage_cfg.name)
-    kwargs = {
-        name: metadata.value
-        for name, field in type(stage_cfg.factory).model_fields.items()
-        for metadata in field.metadata
-        if isinstance(metadata, FactoryDefault)
-    }
-    kwargs.update(global_cfg.stage_factory_kwargs(logical_stage_name) or {})
+    kwargs = dict(global_cfg.stage_factory_kwargs(logical_stage_name) or {})
     reserved = _PLACEMENT_OWNED_KWARGS & kwargs.keys()
     if reserved:
         raise ValueError(
