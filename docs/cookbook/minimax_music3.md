@@ -83,9 +83,11 @@ accepts finite nonnegative values (default 1.7).
 
 Responses are complete stereo PCM16 `wav` or raw interleaved `pcm` at
 32 kHz. `stream=true`, other formats and speed changes return 400. Only one
-song is generated at a time; a concurrent request returns 429. A disconnected
-client's generation releases the worker when computation finishes. Supervisor
-shutdown cancels between frames, acoustic windows and Euler steps. Voxt's
+song is generated at a time; a concurrent request returns 503. A request not
+answered `--request-timeout-s` seconds (1800 by default) after it is admitted
+returns 504. That deadline, a client disconnect and supervisor shutdown each
+cancel generation at its next frame, acoustic window or Euler step, which frees
+the server for the next request. Voxt's
 `--supervised` lifecycle, `/health` and `/v1/models` are supported; this does
 not add a Music3 interface to Voxt.
 
@@ -144,7 +146,8 @@ macOS 26.6.2 and MLX 0.32.3. The native CMake build, 21 selected Music3 tests,
 seven golden-harness tests, six server model-kind checks and two existing
 Whisper supervisor lifecycle checks passed. The Music3 tests cover WAV/PCM
 responses, exact seeded repeats, invalid requests and a concurrent request
-returning 429.
+refused as busy. They also cover the busy, deadline and disconnect paths
+above, each checking that the server returns to idle.
 
 | Reference case | Frames | Samples per channel | Peak PCM error | RMS PCM error |
 | --- | ---: | ---: | ---: | ---: |

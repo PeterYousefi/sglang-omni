@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
+#include <chrono>
 #include <condition_variable>
 #include <future>
 #include <memory>
@@ -16,7 +17,8 @@ namespace music3 {
 
 class SpeechService : public omni_server::Service {
 public:
-  explicit SpeechService(const std::filesystem::path &directory);
+  SpeechService(const std::filesystem::path &directory,
+                double request_timeout_seconds);
   ~SpeechService() override;
   void SetModelName(const std::string &model_name, bool chosen) override;
   void Register(mg_context *context, const std::string &model_name) override;
@@ -33,6 +35,7 @@ private:
   void Run(const std::filesystem::path &directory, std::promise<void> loaded);
   int Handle(mg_connection *connection);
 
+  const std::chrono::steady_clock::duration request_timeout_;
   std::string model_name_;
   bool has_chosen_model_name_ = false;
   std::unique_ptr<Model> model_;
