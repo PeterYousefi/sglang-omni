@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { DuplexSession, heardTextEnd } from "./session.js";
+import { DuplexSession, heardTextEnd, playingTextEnd } from "./session.js";
 
 const PROGRESS = [
   { textEnd: 2, audioMs: 400 },
@@ -20,6 +20,33 @@ test("the heard text is the largest text_end whose audio has played, stepwise", 
     assert.ok(end >= previous);
     previous = end;
   }
+});
+
+test("a playing caption moves word by word through the stretch being played", () => {
+  const text = "One, two, three. Four five.";
+  const progress = [
+    { textEnd: 16, audioMs: 1600 },
+    { textEnd: 27, audioMs: 2600 },
+  ];
+  assert.deepEqual(
+    [0, 300, 500, 900, 1600, 2000, 2300, 2600].map((playedMs) => text.slice(0, playingTextEnd(text, progress, playedMs))),
+    ["", "One", "One", "One, two", "One, two, three.", "One, two, three.", "One, two, three. Four", "One, two, three. Four five."],
+  );
+  assert.equal(playingTextEnd(text, progress.slice(0, 1), 2000), 16);
+});
+
+test("a playing caption advances through Chinese without spaces", () => {
+  const text = "今天天气很好。我们走吧。";
+  const end = playingTextEnd(text, [{ textEnd: 7, audioMs: 1400 }], 700);
+  assert.ok(end > 0 && end < 7, `heard ${text.slice(0, end)}`);
+});
+
+test("a playing reply's caption shows the words played so far, a cut one only what the server kept", () => {
+  const { session } = openSession("One, two, three.", [{ textEnd: 16, audioMs: 1600 }]);
+  session.played("resp_0", 900, false);
+  assert.deepEqual(session.captionParts("resp_0"), { heard: "One, two", pending: ", three." });
+  session.played("resp_0", 600, true);
+  assert.deepEqual(session.captionParts("resp_0"), { heard: "", pending: "" });
 });
 
 function openSession(text = "One, two, three.", progress = PROGRESS) {
@@ -143,7 +170,7 @@ test("a completed reply keeps the heard part and the rest", () => {
   const { session } = openSession();
   session.handle({ type: "response.done", response: { id: "resp_0", status: "completed" } });
   session.played("resp_0", 600, false);
-  assert.deepEqual(session.captionParts("resp_0"), { heard: "On", pending: "e, two, three." });
+  assert.deepEqual(session.captionParts("resp_0"), { heard: "One", pending: ", two, three." });
   session.played("resp_0", 2000, false);
   assert.deepEqual(session.captionParts("resp_0"), { heard: "One, two,", pending: " three." });
 });
