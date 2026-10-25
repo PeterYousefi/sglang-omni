@@ -54,6 +54,7 @@ class QwenInputState:
     frames: deque[tuple[float, bytes]] = field(default_factory=deque)
     waiting: deque[PendingUtterance] = field(default_factory=deque)
     turn_count: int = 0
+    # note (luojiaxuan): The unit being answered, holding every utterance it asks, so an interruption that asks it again keeps them all.
     answering: PendingUtterance | None = None
     # Note (Junnan Li): Utterances interrupted before any of their reply reached the client; the next unit asks them again.
     carried: list[PendingUtterance] = field(default_factory=list)
@@ -156,9 +157,13 @@ class QwenInputHooks(SessionHooks):
             return
         else:
             utterance = state.waiting.popleft()
-        state.answering = utterance
         asked = [*state.carried, utterance]
         state.carried = []
+        state.answering = PendingUtterance(
+            turn=utterance.turn,
+            pcm=b"".join(turn.pcm for turn in asked),
+            frames=tuple(frame for turn in asked for frame in turn.frames),
+        )
         state.emit(
             TimedChunk(
                 CONTROL,
@@ -166,8 +171,8 @@ class QwenInputHooks(SessionHooks):
                 0,
                 0,
                 {
-                    "pcm": b"".join(turn.pcm for turn in asked),
-                    "images": [frame for turn in asked for frame in turn.frames],
+                    "pcm": state.answering.pcm,
+                    "images": list(state.answering.frames),
                     "carried_turns": [turn.turn for turn in asked[:-1]],
                 },
                 format=UNIT_FORMAT,

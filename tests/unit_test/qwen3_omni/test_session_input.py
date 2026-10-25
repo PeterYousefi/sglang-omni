@@ -117,6 +117,25 @@ def test_a_reply_none_of_whose_audio_reached_the_client_is_asked_again(dialog) -
     assert len(unit.payload["pcm"]) == 2 * 640
 
 
+def test_two_unheard_interruptions_ask_both_utterances_again(dialog) -> None:
+    """A unit that asked a carried utterance again kept only its newest utterance when it was interrupted unheard too, so the next unit lost the first."""
+    hooks, outputs, context = dialog
+    append(hooks, context, audio(0))
+    append(hooks, context, control_chunk(COMMIT))
+    append(hooks, context, audio(20))
+    append(hooks, context, control_chunk(COMMIT))
+    append(hooks, context, audio(40))
+    append(hooks, context, control_chunk(COMMIT))
+    for turn, t_ms in ((1, 60), (2, 80)):
+        append(hooks, context, control_chunk(TURN_STARTED, turn=turn))
+        append(hooks, context, control_chunk(SPEECH_STARTED, t_ms=t_ms))
+        append(hooks, context, control_chunk(REPLY_DELIVERED, turn=turn, audio_ms=0.0))
+    unit = outputs[-1]
+    assert unit.format == UNIT_FORMAT and unit.turn == 3
+    assert unit.payload["carried_turns"] == [2]
+    assert len(unit.payload["pcm"]) == 3 * 640
+
+
 def test_a_client_interrupt_targets_the_turn_being_answered(dialog) -> None:
     hooks, outputs, context = dialog
     append(hooks, context, audio(0))

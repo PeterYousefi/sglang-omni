@@ -269,10 +269,11 @@ async def test_an_interrupt_fences_the_old_reply_and_the_next_turn_is_answered(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("interrupt_turn", [None, 1], ids=["open-reply", "named-turn"])
 async def test_a_reply_interrupted_before_any_of_its_audio_left_is_asked_again(
-    tmp_path: Path,
+    tmp_path: Path, interrupt_turn: int | None
 ) -> None:
-    """A reply whose text but none of whose audio reached the client stayed in the history when it was interrupted."""
+    """A reply whose text but none of whose audio reached the client stayed in the history when it was interrupted; a client interrupt naming the turn also fenced the dialog's own interrupt and the delivered report, so no later reply started."""
     factory = f"{__name__}.create_graph_stage"
     async with pipeline(
         tmp_path,
@@ -287,7 +288,9 @@ async def test_a_reply_interrupted_before_any_of_its_audio_left_is_asked_again(
         await coordinator.append_session(identity, audio_chunk(0))
         await coordinator.append_session(identity, control_chunk(COMMIT, sequence=1))
         await read_until(outputs, lambda output: output.format == TEXT_DELTA)
-        await coordinator.control_session(identity, control_chunk(INTERRUPT))
+        await coordinator.control_session(
+            identity, control_chunk(INTERRUPT, turn=interrupt_turn)
+        )
         await coordinator.append_session(identity, audio_chunk(2))
         await coordinator.append_session(identity, control_chunk(COMMIT, sequence=3))
         received = await read_until(outputs, lambda output: is_turn_done(output, 2))
