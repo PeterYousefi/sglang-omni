@@ -66,9 +66,9 @@ public:
                                 const Voice &voice) const;
 
 private:
-  qwen3_asr::Checkpoint checkpoint_;
-  qwen3_asr::Checkpoint speech_tokenizer_checkpoint_;
-  qwen3_asr::Tokenizer tokenizer_;
+  omni_common::Checkpoint checkpoint_;
+  omni_common::Checkpoint speech_tokenizer_checkpoint_;
+  omni_common::Tokenizer tokenizer_;
   T3 t3_;
   FlowDecoder flow_;
   Vocoder vocoder_;

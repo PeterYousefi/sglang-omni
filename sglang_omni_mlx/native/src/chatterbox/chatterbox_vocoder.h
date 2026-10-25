@@ -13,7 +13,7 @@ namespace chatterbox {
 
 class Vocoder {
 public:
-  explicit Vocoder(const qwen3_asr::Checkpoint &checkpoint);
+  explicit Vocoder(const omni_common::Checkpoint &checkpoint);
 
   // 24 kHz samples [1, samples] for mel [1, 80, frames], float32. Draws the
   // source's phases and noise from MLX's global random keys.
@@ -38,7 +38,7 @@ private:
                                  const std::string &prefix,
                                  int kernel_size) const;
 
-  const qwen3_asr::Checkpoint &checkpoint_;
+  const omni_common::Checkpoint &checkpoint_;
   // The periodic Hann window over n_fft samples.
   std::vector<float> window_values_;
   mlx::core::array window_;

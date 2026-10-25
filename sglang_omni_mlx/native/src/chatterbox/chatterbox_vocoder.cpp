@@ -56,7 +56,7 @@ double CosineOfSixteenth(int multiple) {
 
 } // namespace
 
-Vocoder::Vocoder(const qwen3_asr::Checkpoint &checkpoint)
+Vocoder::Vocoder(const omni_common::Checkpoint &checkpoint)
     : checkpoint_(checkpoint), window_(0.0f) {
   for (int n = 0; n < kFftSize; ++n) {
     window_values_.push_back(

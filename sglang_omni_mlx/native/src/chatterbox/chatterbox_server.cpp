@@ -55,9 +55,9 @@
 #include "chatterbox/chatterbox_model.h"
 #include "civetweb.h"
 #include "common/http.h"
+#include "common/text.h"
 #include "qwen3_asr/asr_service.h"
 #include "qwen3_asr/qwen3_asr_transcriber.h"
-#include "qwen3_asr/realtime.h"
 #include "voxtral_tts/voxtral_tts_codec.h"
 
 namespace {
@@ -248,7 +248,7 @@ std::string ReadAllowedFile(const std::string &path,
 
 std::string Base64Bytes(const std::string &text) {
   const std::optional<std::vector<uint8_t>> bytes =
-      qwen3_asr::DecodeBase64(text);
+      omni_common::DecodeBase64(text);
   if (!bytes.has_value() || bytes->empty()) {
     throw std::invalid_argument("reference audio is not valid base64");
   } else {
@@ -371,7 +371,7 @@ ParseRequest(const Json &body, const chatterbox::ChatterboxModel &model,
   RejectUnsupportedFields(body);
   const Json input = FieldOr(body, "input", Json());
   if (!input.is_string() ||
-      qwen3_asr::StripUnicodeWhitespace(input.get<std::string>()).empty()) {
+      omni_common::StripUnicodeWhitespace(input.get<std::string>()).empty()) {
     throw std::invalid_argument("input must be a non-empty string");
   } else {
   }
@@ -413,7 +413,7 @@ ParseRequest(const Json &body, const chatterbox::ChatterboxModel &model,
   } else {
   }
   request.response_format = Lowercase(
-      qwen3_asr::StripUnicodeWhitespace(response_format.get<std::string>()));
+      omni_common::StripUnicodeWhitespace(response_format.get<std::string>()));
   if (request.response_format != "pcm" && request.response_format != "wav") {
     throw std::invalid_argument("response_format must be one of: pcm, wav");
   } else {

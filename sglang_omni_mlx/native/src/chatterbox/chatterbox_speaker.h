@@ -15,7 +15,7 @@ class SpeakerEncoder {
 public:
   // Reads the checkpoint's CAM++ weights under weight_prefix (with its
   // trailing dot), such as "s3gen.speaker_encoder.".
-  SpeakerEncoder(const qwen3_asr::Checkpoint &checkpoint,
+  SpeakerEncoder(const omni_common::Checkpoint &checkpoint,
                  const std::string &weight_prefix);
 
   // The x-vector of 16 kHz samples, float32 [1, 192].
@@ -30,7 +30,7 @@ private:
   mlx::core::array DenseLayer(const mlx::core::array &x,
                               const std::string &prefix, int dilation) const;
 
-  qwen3_asr::WeightMap weights_;
+  omni_common::WeightMap weights_;
 };
 
 } // namespace chatterbox

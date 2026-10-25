@@ -11,6 +11,7 @@
 #include <utility>
 
 #include "chatterbox/chatterbox_audio.h"
+#include "common/text.h"
 #include "qwen3_asr/qwen3_asr_transcriber.h"
 
 namespace chatterbox {
@@ -45,15 +46,16 @@ bool IsUnusedWeight(const std::string &name) {
 
 // The weights of a checkpoint directory whose config.json names model_type,
 // so another checkpoint fails at load rather than at its first request.
-qwen3_asr::WeightMap LoadWeights(const std::filesystem::path &directory,
-                                 const std::string &model_type) {
-  const nlohmann::json config = qwen3_asr::ReadJson(directory / "config.json");
+omni_common::WeightMap LoadWeights(const std::filesystem::path &directory,
+                                   const std::string &model_type) {
+  const nlohmann::json config =
+      omni_common::ReadJson(directory / "config.json");
   if (config.value("model_type", std::string()) != model_type) {
     throw std::runtime_error(directory.string() + " is not a " + model_type +
                              " checkpoint");
   } else {
   }
-  qwen3_asr::WeightMap weights;
+  omni_common::WeightMap weights;
   for (auto &[name, array] :
        mx::load_safetensors((directory / "model.safetensors").string()).first) {
     if (!IsUnusedWeight(name)) {
@@ -152,8 +154,8 @@ std::string NormalizePunctuation(const std::string &text) {
         std::min(Utf8Length(static_cast<unsigned char>(normalized[byte])),
                  normalized.size() - byte);
     const std::vector<uint32_t> code_point =
-        qwen3_asr::CodePoints(normalized.substr(byte, length));
-    if (qwen3_asr::IsUnicodeSpace(code_point.front())) {
+        omni_common::CodePoints(normalized.substr(byte, length));
+    if (omni_common::IsUnicodeSpace(code_point.front())) {
       in_word = false;
     } else {
       if (!in_word && !collapsed.empty()) {
@@ -196,7 +198,7 @@ ChatterboxModel::ChatterboxModel(const std::filesystem::path &model_directory)
       speech_tokenizer_checkpoint_(
           LoadWeights(model_directory / "speech_tokenizer", "s3_tokenizer_v2"),
           nlohmann::json::object()),
-      tokenizer_(model_directory, qwen3_asr::SplitPattern::kGpt2),
+      tokenizer_(model_directory, omni_common::SplitPattern::kGpt2),
       t3_(checkpoint_), flow_(checkpoint_), vocoder_(checkpoint_),
       voice_encoder_(checkpoint_),
       speech_tokenizer_(speech_tokenizer_checkpoint_),

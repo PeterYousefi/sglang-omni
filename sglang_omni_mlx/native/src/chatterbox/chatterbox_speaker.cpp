@@ -162,7 +162,7 @@ mx::array SegmentMeans(const mx::array &x) {
 
 } // namespace
 
-SpeakerEncoder::SpeakerEncoder(const qwen3_asr::Checkpoint &checkpoint,
+SpeakerEncoder::SpeakerEncoder(const omni_common::Checkpoint &checkpoint,
                                const std::string &weight_prefix) {
   const auto copy_weight = [&](const std::string &name) {
     mx::array weight = checkpoint.Weight(weight_prefix + name);

@@ -27,7 +27,7 @@ std::string LayerPrefix(int layer) {
 
 } // namespace
 
-T3::T3(const qwen3_asr::Checkpoint &checkpoint)
+T3::T3(const omni_common::Checkpoint &checkpoint)
     : checkpoint_(checkpoint),
       gelu_scale_(mx::sqrt(mx::array(static_cast<float>(2.0 / M_PI)))) {}
 

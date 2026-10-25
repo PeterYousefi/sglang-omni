@@ -104,7 +104,7 @@ std::vector<float> TrimSilence(const std::vector<float> &samples) {
 
 } // namespace
 
-VoiceEncoder::VoiceEncoder(const qwen3_asr::Checkpoint &checkpoint)
+VoiceEncoder::VoiceEncoder(const omni_common::Checkpoint &checkpoint)
     : checkpoint_(checkpoint), mel_filters_(SlaneyMelFilters16k(kMelCount)) {
   mx::eval(mel_filters_);
 }
@@ -116,7 +116,7 @@ mx::array VoiceEncoder::EmbedWindows(const mx::array &mel_windows) const {
     const mx::array input_gates =
         mx::addmm(checkpoint_.Weight(prefix + ".bias"), x,
                   mx::transpose(checkpoint_.Weight(prefix + ".Wx")));
-    std::optional<qwen3_asr::LstmCell> state;
+    std::optional<omni_common::LstmCell> state;
     std::vector<mx::array> hidden_states;
     hidden_states.reserve(kWindowFrames);
     for (int frame = 0; frame < x.shape(1); ++frame) {
@@ -124,8 +124,8 @@ mx::array VoiceEncoder::EmbedWindows(const mx::array &mel_windows) const {
           mx::slice(input_gates, {0, frame, 0},
                     {input_gates.shape(0), frame + 1, input_gates.shape(2)}),
           1);
-      state =
-          qwen3_asr::LstmStep(gates, state, checkpoint_.Weight(prefix + ".Wh"));
+      state = omni_common::LstmStep(gates, state,
+                                    checkpoint_.Weight(prefix + ".Wh"));
       hidden_states.push_back(state->hidden);
     }
     x = mx::stack(hidden_states, -2);

@@ -12,7 +12,7 @@ namespace chatterbox {
 
 class VoiceEncoder {
 public:
-  explicit VoiceEncoder(const qwen3_asr::Checkpoint &checkpoint);
+  explicit VoiceEncoder(const omni_common::Checkpoint &checkpoint);
 
   // The L2-normalized speaker embedding of 16 kHz samples, float32 [1, 256].
   mlx::core::array Embed(const std::vector<float> &samples_16k) const;
@@ -22,7 +22,7 @@ private:
   // mel bands].
   mlx::core::array EmbedWindows(const mlx::core::array &mel_windows) const;
 
-  const qwen3_asr::Checkpoint &checkpoint_;
+  const omni_common::Checkpoint &checkpoint_;
   mlx::core::array mel_filters_;
 };
 

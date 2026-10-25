@@ -22,7 +22,7 @@ struct FlowPrompt {
 
 class FlowDecoder {
 public:
-  explicit FlowDecoder(const qwen3_asr::Checkpoint &checkpoint);
+  explicit FlowDecoder(const omni_common::Checkpoint &checkpoint);
 
   // The mel [1, 80, 2 * tokens] for speech_tokens int32 [1, tokens], prompt
   // part removed. Draws its noise from MLX's global random keys.
@@ -65,7 +65,7 @@ private:
   mlx::core::array Convolution(const mlx::core::array &x,
                                const std::string &prefix) const;
 
-  const qwen3_asr::Checkpoint &checkpoint_;
+  const omni_common::Checkpoint &checkpoint_;
   // Relative positions from +4999 down to -4999, [9999, 512], for inputs
   // up to 5000 frames.
   mlx::core::array relative_position_table_;

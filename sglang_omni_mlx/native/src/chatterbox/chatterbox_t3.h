@@ -37,7 +37,7 @@ struct T3Voice {
 
 class T3 {
 public:
-  explicit T3(const qwen3_asr::Checkpoint &checkpoint);
+  explicit T3(const omni_common::Checkpoint &checkpoint);
 
   // Samples up to max_tokens speech tokens for text_ids with MLX's global
   // random keys, passing each one before the stop token to on_token. Throws
@@ -61,7 +61,7 @@ private:
                           const std::vector<float> *seen_tokens,
                           const SamplingOptions &options) const;
 
-  const qwen3_asr::Checkpoint &checkpoint_;
+  const omni_common::Checkpoint &checkpoint_;
   // sqrt(2 / pi) as the tanh GELU computes it.
   mlx::core::array gelu_scale_;
 };

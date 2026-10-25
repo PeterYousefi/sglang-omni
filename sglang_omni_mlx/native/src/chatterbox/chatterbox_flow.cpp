@@ -103,7 +103,7 @@ mx::array RelativePositionTable(int length) {
 
 } // namespace
 
-FlowDecoder::FlowDecoder(const qwen3_asr::Checkpoint &checkpoint)
+FlowDecoder::FlowDecoder(const omni_common::Checkpoint &checkpoint)
     : checkpoint_(checkpoint),
       relative_position_table_(RelativePositionTable(kPositionTableLength)) {
   mx::eval(relative_position_table_);
@@ -184,7 +184,7 @@ mx::array FlowDecoder::ConformerLayer(const mx::array &x,
   const int position_count = position_scores.shape(3);
   if (position_count != frames) {
     position_scores =
-        mx::slice(qwen3_asr::RelativeShift(position_scores), {0, 0, 0, 0},
+        mx::slice(omni_common::RelativeShift(position_scores), {0, 0, 0, 0},
                   {1, kEncoderHeads, frames, position_count / 2 + 1});
   } else {
   }
@@ -198,7 +198,7 @@ mx::array FlowDecoder::ConformerLayer(const mx::array &x,
       checkpoint_.LayerNorm(attended, prefix + ".norm_ff", kConformerNormEps);
   return mx::add(
       attended,
-      checkpoint_.Linear(qwen3_asr::Silu(checkpoint_.Linear(
+      checkpoint_.Linear(omni_common::Silu(checkpoint_.Linear(
                              feed_forward_input, prefix + ".feed_forward.w_1")),
                          prefix + ".feed_forward.w_2"));
 }
@@ -244,7 +244,7 @@ mx::array FlowDecoder::TimeEmbedding(const mx::array &time) const {
       mx::concatenate({mx::sin(angles), mx::cos(angles)}, -1);
   const std::string prefix = std::string(kEstimatorPrefix) + ".time_mlp";
   return checkpoint_.Linear(
-      qwen3_asr::Silu(checkpoint_.Linear(sinusoids, prefix + ".linear_1")),
+      omni_common::Silu(checkpoint_.Linear(sinusoids, prefix + ".linear_1")),
       prefix + ".linear_2");
 }
 
@@ -282,7 +282,7 @@ mx::array FlowDecoder::TransformerBlock(const mx::array &x,
       checkpoint_.LayerNorm(attended, prefix + ".norm3", kDecoderNormEps);
   return mx::add(
       attended,
-      checkpoint_.Linear(qwen3_asr::Gelu(checkpoint_.Linear(
+      checkpoint_.Linear(omni_common::Gelu(checkpoint_.Linear(
                              feed_forward_input, prefix + ".ff.net.0.proj")),
                          prefix + ".ff.net.1"));
 }
