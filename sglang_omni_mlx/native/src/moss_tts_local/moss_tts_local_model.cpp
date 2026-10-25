@@ -5,6 +5,8 @@
 #include <limits>
 #include <stdexcept>
 
+#include "common/text.h"
+
 namespace moss_tts_local {
 
 namespace mx = mlx::core;
@@ -159,7 +161,7 @@ MossTtsLocalModel::LoadWeights(const std::filesystem::path &directory,
   } else {
   }
   LoadedWeights loaded;
-  qwen3_asr::WeightMap checkpoint = qwen3_asr::LoadSafetensors(directory);
+  omni_common::WeightMap checkpoint = omni_common::LoadSafetensors(directory);
   while (!checkpoint.empty()) {
     // Note (Jiaxin Deng): each entry leaves the map as it is converted, so
     // the bfloat16 checkpoint is never resident at once.
@@ -196,7 +198,7 @@ MossTtsLocalModel::MossTtsLocalModel(
     const std::filesystem::path &model_directory,
     const std::filesystem::path &codec_directory, int quantization_bits)
     : MossTtsLocalModel(model_directory, codec_directory,
-                        qwen3_asr::ReadJson(model_directory / "config.json"),
+                        omni_common::ReadJson(model_directory / "config.json"),
                         LoadWeights(model_directory, quantization_bits)) {}
 
 MossTtsLocalModel::MossTtsLocalModel(
@@ -241,7 +243,7 @@ MossTtsLocalModel::MossTtsLocalModel(
 PromptEncoder::PromptEncoder(const std::filesystem::path &model_directory)
     : tokenizer_(model_directory) {
   const nlohmann::json config =
-      qwen3_asr::ReadJson(model_directory / "config.json");
+      omni_common::ReadJson(model_directory / "config.json");
   codebook_count_ = config.at("n_vq").get<int>();
   audio_pad_code_ = config.at("audio_pad_code").get<int>();
   im_start_id_ = config.at("im_start_token_id").get<int>();
@@ -255,7 +257,7 @@ PromptEncoder::Rows(const SpeechPrompt &prompt) const {
   // writes None for a missing or blank one.
   const auto field = [](const std::optional<std::string> &value) {
     const std::string stripped =
-        value.has_value() ? qwen3_asr::StripUnicodeWhitespace(*value) : "";
+        value.has_value() ? omni_common::StripUnicodeWhitespace(*value) : "";
     return stripped.empty() ? std::string("None") : stripped;
   };
   const std::optional<std::string> token_count =
@@ -384,7 +386,7 @@ mx::array MossTtsLocalModel::LocalLast(const mx::array &inputs) const {
                                prefix + ".attn"));
     hidden = mx::add(
         hidden,
-        checkpoint_.Linear(qwen3_asr::Silu(checkpoint_.Linear(
+        checkpoint_.Linear(omni_common::Silu(checkpoint_.Linear(
                                checkpoint_.LayerNorm(hidden, prefix + ".ln_2",
                                                      local_norm_eps_),
                                prefix + ".mlp.fc_in")),

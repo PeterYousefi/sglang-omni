@@ -62,7 +62,7 @@ private:
                                  const std::string &prefix, const Stage &stage,
                                  AttentionCache &cache) const;
 
-  qwen3_asr::Checkpoint checkpoint_;
+  omni_common::Checkpoint checkpoint_;
   std::vector<Stage> stages_;
   mlx::core::Dtype transformer_dtype_;
   int sample_rate_;

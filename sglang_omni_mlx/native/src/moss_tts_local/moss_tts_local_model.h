@@ -58,7 +58,7 @@ public:
   std::vector<std::vector<int>> Rows(const SpeechPrompt &prompt) const;
 
 private:
-  qwen3_asr::Tokenizer tokenizer_;
+  omni_common::Tokenizer tokenizer_;
   int codebook_count_;
   int audio_pad_code_;
   int im_start_id_;
@@ -89,7 +89,7 @@ public:
 
 private:
   struct LoadedWeights {
-    qwen3_asr::WeightMap weights;
+    omni_common::WeightMap weights;
     nlohmann::json quantization;
   };
   MossTtsLocalModel(const std::filesystem::path &model_directory,
@@ -107,7 +107,7 @@ private:
   mlx::core::array LocalAttention(const mlx::core::array &x,
                                   const std::string &prefix) const;
 
-  qwen3_asr::Checkpoint checkpoint_;
+  omni_common::Checkpoint checkpoint_;
   AudioCodec codec_;
   PromptEncoder prompt_encoder_;
   qwen3_asr::Qwen3Decoder backbone_;

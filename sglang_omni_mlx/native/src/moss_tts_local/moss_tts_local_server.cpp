@@ -49,6 +49,7 @@
 
 #include "civetweb.h"
 #include "common/http.h"
+#include "common/text.h"
 #include "moss_tts_local/moss_tts_local_model.h"
 #include "qwen3_asr/asr_service.h"
 #include "qwen3_asr/qwen3_asr_transcriber.h"
@@ -262,7 +263,7 @@ SplitTokenPrefix(const std::string &text) {
   }
   // As Python's str.lstrip, Unicode whitespace after the prefix goes too.
   const std::string rest = text.substr(digits_end + 1);
-  const std::string stripped = qwen3_asr::StripUnicodeWhitespace(rest);
+  const std::string stripped = omni_common::StripUnicodeWhitespace(rest);
   return {stripped.empty() ? "" : rest.substr(rest.find(stripped)),
           static_cast<int>(count)};
 }
@@ -313,7 +314,7 @@ SpeechRequest ParseRequest(const Json &body,
   }
   CheckFieldTypes(body);
   const Json input = FieldOr(body, "input", Json(""));
-  if (qwen3_asr::StripUnicodeWhitespace(input.get<std::string>()).empty()) {
+  if (omni_common::StripUnicodeWhitespace(input.get<std::string>()).empty()) {
     throw std::invalid_argument("input must be a non-empty string");
   } else {
   }
@@ -344,7 +345,7 @@ SpeechRequest ParseRequest(const Json &body,
   }
   // Note (Minyi Tang): as CUDA's response_format.strip().lower().
   request.response_format = AsciiLower(
-      qwen3_asr::StripUnicodeWhitespace(response_format.get<std::string>()));
+      omni_common::StripUnicodeWhitespace(response_format.get<std::string>()));
   if (request.response_format != "pcm" && request.response_format != "wav") {
     throw std::invalid_argument("response_format must be one of: pcm, wav");
   } else {
@@ -370,7 +371,7 @@ SpeechRequest ParseRequest(const Json &body,
   if (!task_type.is_null()) {
     std::string normalized;
     for (const char character :
-         qwen3_asr::StripUnicodeWhitespace(task_type.get<std::string>())) {
+         omni_common::StripUnicodeWhitespace(task_type.get<std::string>())) {
       if (character != '_' && character != '-') {
         normalized.push_back(character);
       } else {
@@ -390,7 +391,7 @@ SpeechRequest ParseRequest(const Json &body,
   const Json language = FieldOr(body, "language", Json());
   if (!language.is_null()) {
     const std::string wanted = AsciiLower(
-        qwen3_asr::StripUnicodeWhitespace(language.get<std::string>()));
+        omni_common::StripUnicodeWhitespace(language.get<std::string>()));
     const auto found = std::find_if(
         kLanguages.begin(), kLanguages.end(),
         [&](const char *name) { return AsciiLower(name) == wanted; });

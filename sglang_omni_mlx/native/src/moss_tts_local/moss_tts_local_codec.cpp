@@ -28,7 +28,7 @@ mx::array WeightNormKernel(const mx::array &magnitude,
 
 // A 1x1 convolution over x [batch, channels, frames], as the weight-normed
 // Conv1d it was trained as.
-mx::array PointwiseConvolution(const qwen3_asr::Checkpoint &checkpoint,
+mx::array PointwiseConvolution(const omni_common::Checkpoint &checkpoint,
                                const mx::array &x, const std::string &prefix) {
   const mx::array y = mx::conv1d(mx::transpose(x, {0, 2, 1}),
                                  checkpoint.Weight(prefix + ".weight"));
@@ -84,10 +84,11 @@ mx::array Rotate(const mx::array &x, int offset, float max_period) {
   return mx::astype(mx::reshape(rotated, x.shape()), x.dtype());
 }
 
-qwen3_asr::WeightMap LoadDecoderWeights(const std::filesystem::path &directory,
-                                        mx::Dtype transformer_dtype) {
-  qwen3_asr::WeightMap raw;
-  qwen3_asr::WeightMap checkpoint = qwen3_asr::LoadSafetensors(directory);
+omni_common::WeightMap
+LoadDecoderWeights(const std::filesystem::path &directory,
+                   mx::Dtype transformer_dtype) {
+  omni_common::WeightMap raw;
+  omni_common::WeightMap checkpoint = omni_common::LoadSafetensors(directory);
   while (!checkpoint.empty()) {
     // Note (Jiaxin Deng): each tensor leaves the map as it is cast, so the
     // float32 checkpoint is never resident at once.
@@ -103,7 +104,7 @@ qwen3_asr::WeightMap LoadDecoderWeights(const std::filesystem::path &directory,
     } else {
     }
   }
-  qwen3_asr::WeightMap weights;
+  omni_common::WeightMap weights;
   for (auto &[name, array] : raw) {
     const std::string suffix = ".parametrizations.weight.original1";
     if (name.size() > suffix.size() &&
@@ -129,7 +130,7 @@ AudioCodec::AudioCodec(const std::filesystem::path &codec_directory,
                   nlohmann::json::object()),
       transformer_dtype_(transformer_dtype) {
   const nlohmann::json config =
-      qwen3_asr::ReadJson(codec_directory / "config.json");
+      omni_common::ReadJson(codec_directory / "config.json");
   sample_rate_ = config.at("sampling_rate").get<int>();
   channel_count_ = config.at("number_channels").get<int>();
   if (!config.value("enable_channel_interleave", true) || channel_count_ < 1) {
