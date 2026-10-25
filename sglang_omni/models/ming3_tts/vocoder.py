@@ -9,7 +9,13 @@ from pathlib import Path
 import torch
 from transformers import Qwen2Model
 
-from sglang_omni.models.ming3_tts.stages import load_audio_vae
+from sglang_omni.models.ming3_tts.stages import (
+    SpeechConfig,
+    is_dense_checkpoint,
+    load_audio_vae,
+    load_checkpoint_config,
+)
+from sglang_omni.models.ming3_tts.vocoder_graph import VocoderGraphRunner
 from sglang_omni.proto.request import StagePayload
 from sglang_omni.scheduling.simple_scheduler import SimpleScheduler
 from sglang_omni.utils.audio_payload import audio_waveform_payload
@@ -108,6 +114,16 @@ def create_vocoder_executor(
     frames_per_latent = decoder.upsampling.scale_factor
     # note (rsi): every length up to graph_latent_steps is captured before
     # serving, so no request pays a capture or a new cuDNN attention plan.
+    configuration = load_checkpoint_config(checkpoint)
+    dense = is_dense_checkpoint(configuration)
+    full_graphs: VocoderGraphRunner | None = None
+    if not dense and resolved_device.type == "cuda":
+        speech_config = SpeechConfig.model_validate(configuration["tts_config"])
+        full_graphs = VocoderGraphRunner(
+            vae, min(graph_latent_steps, speech_config.maximum_decode_steps)
+        )
+    else:
+        pass
     decoder_graphs = DecoderGraphs(
         decoder.decoder,
         (
@@ -115,7 +131,7 @@ def create_vocoder_executor(
                 latent_steps * frames_per_latent
                 for latent_steps in range(1, graph_latent_steps + 1)
             ]
-            if resolved_device.type == "cuda"
+            if dense and resolved_device.type == "cuda"
             else []
         ),
         decoder.decoder.config.hidden_size,
@@ -125,18 +141,23 @@ def create_vocoder_executor(
     @torch.inference_mode()
     def decode(payload: StagePayload) -> StagePayload:
         latents = payload.data["latents"].to(resolved_device, dtype=torch.bfloat16)
-        # note (rsi): the non-streaming AudioVAE.decode, with its transformer
-        # replayed; upsampling and the ISTFT head stay exact-length eager ops.
-        frames = decoder.upsampling.upsampler(
-            decoder.fc1(latents.reshape(1, -1, latents.shape[-1])).transpose(1, 2)
-        ).transpose(1, 2)
-        waveform, _, _, _ = decoder.head(
-            decoder_graphs.run(frames),
-            streaming=False,
-            audio_buffer=None,
-            window_buffer=None,
-            last_chunk=False,
-        )
+        if full_graphs is not None:
+            waveform = full_graphs.decode(latents.reshape(1, -1, latents.shape[-1]))
+        elif not dense:
+            waveform, _, _ = vae.decode(latents.reshape(1, -1, latents.shape[-1]))
+        else:
+            # note (rsi): the non-streaming AudioVAE.decode, with its transformer
+            # replayed; upsampling and the ISTFT head stay exact-length eager ops.
+            frames = decoder.upsampling.upsampler(
+                decoder.fc1(latents.reshape(1, -1, latents.shape[-1])).transpose(1, 2)
+            ).transpose(1, 2)
+            waveform, _, _, _ = decoder.head(
+                decoder_graphs.run(frames),
+                streaming=False,
+                audio_buffer=None,
+                window_buffer=None,
+                last_chunk=False,
+            )
         usage = payload.data["usage"]
         payload.data = audio_waveform_payload(
             waveform.float().cpu(),
