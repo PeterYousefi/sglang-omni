@@ -20,11 +20,14 @@ constexpr uint16_t kWavFormatFloat = 3;
 constexpr uint16_t kWavFormatExtensible = 0xFFFE;
 constexpr int kMaxChannelCount = 254;
 // Note (Jiaxin Deng): a header outside these rates, or a rate pair whose
-// resampling filter would pass kMaxResampleTaps, is refused before any
-// allocation; every common rate pair is far inside.
+// resampling filter would pass kMaxResampleTaps in all or
+// kMaxTapsPerOutputSample per output sample, is refused before any
+// allocation, which bounds the work 30 s of audio takes to about 1e9
+// multiply-adds; every common rate pair, 88.2 kHz the costliest, is inside.
 constexpr uint32_t kMinFileSampleRate = 1000;
 constexpr uint32_t kMaxFileSampleRate = 384000;
 constexpr long kMaxResampleTaps = 1 << 22;
+constexpr long kMaxTapsPerOutputSample = 1024;
 constexpr int kResampleZeroCrossings = 6;
 constexpr double kResampleRolloff = 0.99;
 
@@ -243,7 +246,8 @@ std::vector<float> Resample(const std::vector<float> &samples, int from_rate,
   const long width = static_cast<long>(
       std::ceil(kResampleZeroCrossings * from / base_frequency));
   const long tap_count = 2 * width + from;
-  if (tap_count * to > kMaxResampleTaps) {
+  if (tap_count * to > kMaxResampleTaps ||
+      tap_count > kMaxTapsPerOutputSample) {
     throw std::invalid_argument("reference WAV sample rate " +
                                 std::to_string(from_rate) +
                                 " Hz is not supported");

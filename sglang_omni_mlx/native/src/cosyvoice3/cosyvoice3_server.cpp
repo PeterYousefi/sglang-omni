@@ -836,7 +836,13 @@ private:
     // Note (Jiaxin Deng): the text is tokenized and the reference audio read
     // and resampled only once the request holds a slot, so a burst of long
     // texts or large references cannot hold more than the queue allows; a
-    // request refused here frees its slot again.
+    // request refused here frees its slot again. Its deadline runs from
+    // here, so that work counts against it.
+    const auto deadline = std::chrono::steady_clock::now() + request_timeout_;
+    const auto release_slot = [this] {
+      std::lock_guard<std::mutex> lock(admission_mutex_);
+      --admitted_requests_;
+    };
     try {
       std::tie(request.prompt_ids, request.target_ids) =
           model_.EncodeText(request.text);
@@ -855,14 +861,16 @@ private:
       } else {
       }
     } catch (const std::invalid_argument &error) {
-      {
-        std::lock_guard<std::mutex> lock(admission_mutex_);
-        --admitted_requests_;
-      }
+      release_slot();
       return omni_server::BadRequest(connection, error.what());
     }
-
-    const auto deadline = std::chrono::steady_clock::now() + request_timeout_;
+    if (std::chrono::steady_clock::now() >= deadline) {
+      release_slot();
+      std::cerr << "speech generation timed out\n";
+      return omni_server::WriteJson(
+          connection, 504, {{"detail", "Speech generation timed out."}});
+    } else {
+    }
     const std::string request_id = NewRequestId();
     auto channel = std::make_shared<AudioChannel>();
     const qwen3_asr::CancelFlag cancel = qwen3_asr::NewCancelFlag();

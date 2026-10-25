@@ -15,11 +15,13 @@ the GPU computes, so only a chip with golden outputs checks them.
 A vocode case (vocode_tokens_from, and optionally reference_clip) vocodes the
 speech tokens a sampling case gave on the chip with golden outputs, so every chip
 runs the flow and HiFT on the same tokens; its mel's mean per band and per frame
-must stay within MEL_TOLERANCE of that chip's.
+must stay within MEL_TOLERANCE of that chip's, and on that chip its 16-bit PCM
+must hash the same.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import subprocess
 import tempfile
@@ -70,10 +72,12 @@ def synthesize(
     with tempfile.TemporaryDirectory(prefix="cosyvoice3-golden-") as directory:
         tokens_path = Path(directory) / "tokens.json"
         mel_path = Path(directory) / "mel.npy"
+        wav_path = Path(directory) / "speech.wav"
         if tokens is not None:
             given_path = Path(directory) / "given.json"
             given_path.write_text(json.dumps({"speech_tokens": tokens}))
             flags += ["--tokens-input", str(given_path), "--mel-output", str(mel_path)]
+            flags += ["--output", str(wav_path)]
         else:
             pass
         completed = subprocess.run(
@@ -95,6 +99,11 @@ def synthesize(
         )
         outputs = json.loads(tokens_path.read_text())
         mel = np.load(mel_path).astype(np.float32)[0] if tokens is not None else None
+        pcm_sha256 = (
+            hashlib.sha256(wav_path.read_bytes()).hexdigest()
+            if tokens is not None
+            else None
+        )
     reference = outputs["reference"]
     reference_codes = (
         ["reference " + " ".join(str(value) for value in reference["speech_tokens"])]
@@ -111,6 +120,7 @@ def synthesize(
         # mel is [80 bands, frames].
         result["mel_band_means"] = [round(float(v), 4) for v in mel.mean(axis=1)]
         result["mel_frame_means"] = [round(float(v), 4) for v in mel.mean(axis=0)]
+        result["pcm_sha256"] = pcm_sha256
     else:
         pass
     return result
@@ -161,4 +171,8 @@ def check(
                 )
             else:
                 lines.append(f"`{case_id}` {field} within {gap:.4f} of {reference}")
+        if reference == device and expected["pcm_sha256"] != actual["pcm_sha256"]:
+            failures.append(f"`{case_id}` has other 16-bit PCM than {reference}'s")
+        else:
+            pass
     return lines, failures

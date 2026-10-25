@@ -708,6 +708,11 @@ def test_cosyvoice3_reads_reference_wav_formats(
             "reference WAV sample rate 44099 Hz is not supported",
         ),
         (lambda: wav_bytes(np.zeros(16000), 500), "reference WAV sample rate"),
+        # A rate whose filter needs thousands of taps per output sample.
+        (
+            lambda: wav_bytes(np.zeros(271640), 271640),
+            "reference WAV sample rate 271640 Hz is not supported",
+        ),
         (lambda: wav_bytes(np.zeros(16000), 16000)[:40], "reference WAV has no data"),
         (
             lambda: wav_bytes(np.full(16000, np.nan), 16000, "float32"),
