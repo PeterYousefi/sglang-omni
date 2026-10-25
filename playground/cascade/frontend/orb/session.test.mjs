@@ -41,12 +41,14 @@ test("a playing caption advances through Chinese without spaces", () => {
   assert.ok(end > 0 && end < 7, `heard ${text.slice(0, end)}`);
 });
 
-test("a playing reply's caption shows the words played so far, a cut one only what the server kept", () => {
+test("a cut reply's caption stays where it stopped until the server reports what it kept", () => {
   const { session } = openSession("One, two, three.", [{ textEnd: 16, audioMs: 1600 }]);
   session.played("resp_0", 900, false);
   assert.deepEqual(session.captionParts("resp_0"), { heard: "One, two", pending: ", three." });
-  session.played("resp_0", 600, true);
-  assert.deepEqual(session.captionParts("resp_0"), { heard: "", pending: "" });
+  session.played("resp_0", 950, true);
+  assert.deepEqual(session.captionParts("resp_0"), { heard: "One, two", pending: "" });
+  session.handle({ type: "sglang.response.heard", response_id: "resp_0", item_id: "item_0", text_end: 3 });
+  assert.deepEqual(session.captionParts("resp_0"), { heard: "One", pending: "" });
 });
 
 function openSession(text = "One, two, three.", progress = PROGRESS) {
@@ -143,7 +145,7 @@ test("a completed reply the player stops keeps the prefix the history kept", () 
   const { session } = openSession(MODEL_REPLY, [{ textEnd: 87, audioMs: 6560 }]);
   session.handle({ type: "response.done", response: { id: "resp_0", status: "completed" } });
   session.played("resp_0", 2352, true);
-  assert.deepEqual(session.captionParts("resp_0"), { heard: "", pending: "" });
+  assert.deepEqual(session.captionParts("resp_0"), { heard: "I’m Qwen, a large language", pending: "" });
   heard(session, 3);
   assert.deepEqual(session.captionParts("resp_0"), { heard: "I’m", pending: "" });
 });

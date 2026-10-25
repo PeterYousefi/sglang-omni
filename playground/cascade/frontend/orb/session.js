@@ -117,8 +117,8 @@ export class DuplexSession {
 
   // What the caption shows of a reply: the heard part and the part still to play. A reply that ended
   // other than completed, or that the player stopped, keeps only what was heard: the prefix the
-  // server's history kept once it reports one, else the progress the player passed, and nothing when
-  // none of its audio played. A reply without progress from the server is shown whole until it is cut.
+  // server's history kept once it reports one, else where its caption was when it stopped, and nothing
+  // when none of its audio played. A reply without progress from the server is shown whole until it is cut.
   captionParts(responseId) {
     const reply = this.reply(responseId);
     if (!reply) return { heard: "", pending: "" };
@@ -127,10 +127,8 @@ export class DuplexSession {
     let end;
     if (cut && reply.keptEnd !== null) {
       end = codeUnitOffset(reply.text, reply.keptEnd);
-    } else if (reply.progress.length && cut) {
-      end = codeUnitOffset(reply.text, this.heardEnd(responseId));
     } else if (reply.progress.length) {
-      // note (luojiaxuan): A playing reply's heard part moves word by word through the stretch being played.
+      // note (luojiaxuan): A playing reply's heard part moves word by word through the stretch being played; playedMs stops with a stopped reply, so its caption stays put until the kept prefix arrives.
       end = playingTextEnd(reply.text, reply.progress, reply.playedMs);
     } else if (cut) {
       end = 0;
