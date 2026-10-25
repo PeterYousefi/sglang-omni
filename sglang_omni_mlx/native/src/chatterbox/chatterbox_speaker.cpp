@@ -337,8 +337,8 @@ mx::array SpeakerEncoder::Embed(const std::vector<float> &samples_16k) const {
   x = Relu(BatchNorm(x, "xvector.out_nonlinear.batchnorm"));
   x = SwapTimeAndChannels(x);
 
-  // Mean and population standard deviation over time, then the projection.
-  x = mx::concatenate({mx::mean(x, 2), mx::std(x, 2)}, 1);
+  // Mean and unbiased standard deviation over time, then the projection.
+  x = mx::concatenate({mx::mean(x, 2), mx::std(x, 2, false, 1)}, 1);
   x = mx::squeeze(
       mx::conv1d(mx::expand_dims(x, 1), Weight("xvector.dense.linear.weight")),
       1);
