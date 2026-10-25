@@ -134,7 +134,7 @@ class Ming3StreamingVocoder(StreamingVocoderBase[Ming3StreamState, None]):
 
     def final_result_data(
         self, request_id: str, payload: StagePayload, state: Ming3StreamState
-    ) -> dict[str, int | float | str | dict[str, int]]:
+    ) -> dict[str, int | float | str | dict[str, int] | None]:
         if state.emitted_samples == 0:
             raise RuntimeError(f"Ming 3 stream {request_id} completed without audio")
         else:
@@ -142,5 +142,6 @@ class Ming3StreamingVocoder(StreamingVocoderBase[Ming3StreamState, None]):
                 "modality": "audio",
                 "sample_rate": self.sample_rate,
                 "duration_s": state.emitted_samples / self.sample_rate,
+                "finish_reason": payload.data["finish_reason"],
                 "usage": payload.data["usage"],
             }

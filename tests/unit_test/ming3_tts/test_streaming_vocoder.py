@@ -74,7 +74,7 @@ def test_incremental_audio_matches_full_decode_and_flushes_tail(
     payload = StagePayload(
         "speech",
         OmniRequest("text", params={"stream": True}),
-        {"usage": {"completion_tokens": latent_steps}},
+        {"usage": {"completion_tokens": latent_steps}, "finish_reason": "stop"},
     )
     messages = []
     for chunk_id, latent in enumerate(latents):
@@ -107,6 +107,7 @@ def test_incremental_audio_matches_full_decode_and_flushes_tail(
     torch.testing.assert_close(actual, expected.reshape(-1), atol=1e-5, rtol=1e-4)
     assert messages[-1].type == "result"
     assert messages[-1].data.data["usage"] == payload.data["usage"]
+    assert messages[-1].data.data["finish_reason"] == "stop"
     assert "audio_waveform" not in messages[-1].data.data
 
 
@@ -158,7 +159,7 @@ def test_interleaved_streams_finish_after_late_payload_and_release_state(
         vocoder.handle_stream_done(request_id)
         assert request_id in vocoder.stream_states
         payload = StagePayload(
-            request_id, OmniRequest("text", params={"stream": True}), {"usage": {}}
+            request_id, OmniRequest("text", params={"stream": True}), {"usage": {}, "finish_reason": "length"}
         )
         vocoder.handle_new_request_batch(
             [IncomingMessage(request_id=request_id, type="new_request", data=payload)]

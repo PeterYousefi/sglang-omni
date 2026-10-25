@@ -478,6 +478,7 @@ def create_tts_engine_executor(
     def build_result(request: Ming3TTSRequestData) -> StagePayload:
         payload = request.stage_payload
         payload.data = {
+            "finish_reason": request.finish_reason,
             "usage": {
                 "prompt_tokens": len(request.input_ids),
                 "completion_tokens": len(request.output_ids),
