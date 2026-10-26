@@ -695,7 +695,7 @@ Create a request template, for example `request.json`:
 }
 ```
 
-For Base, use a fixed `references` entry instead of a built-in voice. `--seedtts-samples` replaces the bundled cases with prompts that missed codec EOS on 0.6B Base in #1179.
+For Base, use a fixed `references` entry instead of a built-in voice. The probe sends four built-in short lines in English and Chinese; `--cases` takes a JSON list of your own, and `--seedtts-samples` probes the SeedTTS prompts that missed codec EOS on 0.6B Base in #1179.
 
 ```bash
 python -m benchmarks.eval.benchmark_tts_generation_budget \

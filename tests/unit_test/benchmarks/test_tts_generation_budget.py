@@ -16,7 +16,7 @@ import soundfile as sf
 from benchmarks.dataset.seedtts import SampleInput
 from benchmarks.eval import benchmark_tts_generation_budget
 from benchmarks.eval.benchmark_tts_generation_budget import (
-    SEEDTTS_RUNAWAY_SAMPLES_PATH,
+    SEEDTTS_RUNAWAY_SAMPLE_IDS,
     GenerationProbeCase,
     run_generation_probe,
     seedtts_probe_cases,
@@ -544,13 +544,12 @@ def test_seedtts_cases_keep_their_reference_audio_and_transcript(
         seedtts_probe_cases([], "en")
 
 
-def test_bundled_seedtts_runaway_prompts_are_distinct_ids() -> None:
-    sample_ids = json.loads(SEEDTTS_RUNAWAY_SAMPLES_PATH.read_text())
-    assert sample_ids
-    assert len(set(sample_ids)) == len(sample_ids)
+def test_seedtts_runaway_prompts_are_distinct_ids() -> None:
+    assert SEEDTTS_RUNAWAY_SAMPLE_IDS
+    assert len(set(SEEDTTS_RUNAWAY_SAMPLE_IDS)) == len(SEEDTTS_RUNAWAY_SAMPLE_IDS)
     assert all(
         re.fullmatch(r"common_voice_en_\d+-common_voice_en_\d+", item)
-        for item in sample_ids
+        for item in SEEDTTS_RUNAWAY_SAMPLE_IDS
     )
 
 
