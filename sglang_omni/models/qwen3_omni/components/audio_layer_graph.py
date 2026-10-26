@@ -234,9 +234,8 @@ class AudioLayerGraphRunner:
             return
         else:
             pass
-        # note (Zhuofeng-Li): a cyclic graph finalizer can destroy its pool during capture.
-        gc.collect()
         gc_was_enabled = gc.isenabled()
+        gc.collect()
         gc.disable()
         try:
             for bucket in self.token_buckets:
