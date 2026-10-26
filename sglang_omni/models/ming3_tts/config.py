@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import ClassVar, Literal
 
 from pydantic import Field, model_validator
@@ -115,11 +116,13 @@ class Ming3TTSPipelineConfig(PipelineConfig):
         else:
             pass
         model_path = data["model_path"]
-        repo_id, separator, revision = model_path.partition("@")
+        if Path(model_path).is_dir():
+            repo_id, revision = model_path, None
+        else:
+            repo_id, separator, pinned_revision = model_path.partition("@")
+            revision = pinned_revision if separator else None
         dense = (
-            try_resolve_ming3_dense_tts(
-                repo_id, revision=revision if separator else None
-            )
+            try_resolve_ming3_dense_tts(repo_id, revision=revision)
             == DENSE_ARCHITECTURE
         )
         return {

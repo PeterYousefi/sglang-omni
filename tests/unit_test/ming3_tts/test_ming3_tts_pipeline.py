@@ -71,6 +71,8 @@ def test_checkpoint_defaults_preserve_unqualified_tiny_execution(
     tmp_path: Path, dense: bool
 ) -> None:
     """Dense optimizations once enabled unqualified scheduling and GPU placement for Tiny."""
+    tmp_path = tmp_path / "checkpoint@local"
+    tmp_path.mkdir()
     (tmp_path / "config.json").write_text(
         json.dumps(
             {
