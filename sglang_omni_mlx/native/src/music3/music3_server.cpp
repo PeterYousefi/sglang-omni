@@ -15,6 +15,7 @@ constexpr int kMaxRequestTimeoutSeconds = 24 * 60 * 60;
 } // namespace
 
 int main(int argc, char **argv) {
+  bool is_serial_offload_enabled = false;
   mlx::core::set_cache_limit(1024ULL * 1024 * 1024);
   double request_timeout_seconds = 1800;
   return omni_server::Serve(
@@ -22,11 +23,16 @@ int main(int argc, char **argv) {
       {{"minimax_music3",
         [&](const std::filesystem::path &directory) {
           return std::make_unique<music3::SpeechService>(
-              directory, request_timeout_seconds);
+              directory, request_timeout_seconds, is_serial_offload_enabled);
         },
         {{"--request-timeout-s",
           [&](const std::string &value) {
             request_timeout_seconds = std::stod(value);
+          }},
+         {"--stage-offload-components",
+          [&](const std::string &offload_components) {
+            music3::ValidateSerialOffload(offload_components);
+            is_serial_offload_enabled = true;
           }}},
         [&]() {
           if (!(request_timeout_seconds > 0 &&

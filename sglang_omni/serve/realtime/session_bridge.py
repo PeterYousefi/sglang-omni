@@ -72,6 +72,7 @@ from sglang_omni.serve.realtime.types import (
     Capabilities,
     InteractionAdapter,
     OutputSink,
+    ProtocolError,
     RuntimeLimits,
     Unit,
     samples_to_ms,
@@ -119,6 +120,7 @@ def capabilities_of(ports: SessionPorts) -> Capabilities:
         input_modalities=ports.input_modalities,
         sampling_parameters=ports.sampling_parameters,
         supports_instruction_updates="instructions" in ports.hot_settings,
+        supports_sampling_updates="sampling" in ports.hot_settings,
         supports_truncate=TRUNCATE in ports.controls,
         supports_client_commit=COMMIT in ports.controls,
     )
@@ -211,6 +213,8 @@ class SessionBridge(InteractionAdapter):
         self.response_turn: int | None = None
         # note (Haoling Pu): a truncate still cuts the last ended response (turn, response id, item id) until the next reply starts.
         self.ended_response: tuple[int | None, str, str] | None = None
+        # note (luojiaxuan): The turn of every reply item, so a client truncate reaches the reply it names.
+        self.item_turns: dict[str, int | None] = {}
         self.response_text = ""
         self.has_audio = False
 
@@ -284,7 +288,9 @@ class SessionBridge(InteractionAdapter):
             self.pending_input_sequence = None
             self.input_done = None
 
-    async def append_control(self, control: dict[str, object]) -> None:
+    async def append_control(
+        self, control: dict[str, object], *, turn: int | None = None
+    ) -> None:
         async with self.append_lock:
             await self.append_chunk(
                 TimedChunk(
@@ -294,6 +300,7 @@ class SessionBridge(InteractionAdapter):
                     self.next_input_sequence,
                     control,
                     format=SESSION_CONTROL,
+                    turn=turn,
                 )
             )
 
@@ -312,8 +319,16 @@ class SessionBridge(InteractionAdapter):
             should_preempt=True,
         )
 
-    async def truncate(self, audio_end_ms: float) -> None:
-        await self.append_control({"type": TRUNCATE, "t_ms": audio_end_ms})
+    async def truncate(self, item_id: str, audio_end_ms: float) -> None:
+        if item_id in self.item_turns:
+            await self.append_control(
+                {"type": TRUNCATE, "t_ms": audio_end_ms},
+                turn=self.item_turns[item_id],
+            )
+        else:
+            raise ProtocolError(
+                "item_not_found", f"assistant item {item_id!r} was not found", "item_id"
+            )
 
     async def commit(self) -> None:
         await self.append_control({"type": COMMIT})
@@ -400,6 +415,7 @@ class SessionBridge(InteractionAdapter):
             self.response_id = f"resp_{self.turn_count}"
             self.response_turn = turn
             self.response_item_id = f"item_{self.turn_count}"
+            self.item_turns[self.response_item_id] = turn
             self.turn_count += 1
             self.response_text = ""
             self.has_audio = False
