@@ -42,6 +42,7 @@ from sglang_omni.proto.streams import (
     CONFIGURE,
     INTERRUPT,
     PCM16,
+    REPLY_DELIVERED,
     REPLY_PROGRESS,
     SESSION_CONTROL,
     SESSION_INPUT_SAMPLE_RATE_HZ,
@@ -229,6 +230,7 @@ class ComponentGraphConfig(BaseModel):
         self.check_published_audio()
         self.check_turn_roles()
         self.check_progress()
+        self.check_delivery()
         return self
 
     def check_names(self) -> None:
@@ -357,6 +359,31 @@ class ComponentGraphConfig(BaseModel):
             elif lost:
                 raise ValueError(
                     f"node {node.name!r} reads {lost} as data, but a control edge takes them"
+                )
+            else:
+                pass
+
+    def check_delivery(self) -> None:
+        """A node that opens turns answers after a reply it interrupted only once the graph reports the audio of the reply it delivered, which the graph sends when the interrupt reaches, on a control edge, a node that publishes audio, to the readers of that node's session. A graph without audio whose turn opener interrupts no node is exempt."""
+        publishes_audio = bool(self.published_audio_ports())
+        for node in self.nodes:
+            takers = [
+                other
+                for other in self.nodes
+                if any(
+                    edge.source == node.name and edge.event == INTERRUPT
+                    for edge in other.controls
+                )
+            ]
+            reporters = [
+                other.name
+                for other in takers
+                if AUDIO_FORMATS & set(self.publish.get(other.name, ()))
+                and SESSION_CONTROL in node.edges().get(other.name, frozenset())
+            ]
+            if node.opens_turns and (takers or publishes_audio) and not reporters:
+                raise ValueError(
+                    f"node {node.name!r} waits for {REPLY_DELIVERED} after it interrupts a reply: a node that publishes audio must take its {INTERRUPT} on a control edge, and {node.name!r} must read that node's {SESSION_CONTROL}"
                 )
             else:
                 pass
