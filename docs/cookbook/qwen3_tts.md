@@ -711,7 +711,7 @@ python -m benchmarks.eval.benchmark_tts_generation_budget \
 
 Add `--stream` to check raw PCM streams. Output directories must be new. A fixed seed does not make waveforms bitwise identical because prefix-cache state and batch composition can change between requests.
 
-The TTS CI non-streaming and streaming stages run this probe for Qwen3-TTS on four short cases with eight seeds, 64 requests per stage, and upload the evidence.
+The TTS CI non-streaming and streaming stages run this probe for Qwen3-TTS on four short cases with eight seeds, 64 requests per stage, and upload `results.jsonl` with the audio of the pairs that failed.
 
 ## Known Limitations
 

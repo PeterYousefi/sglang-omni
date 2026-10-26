@@ -194,9 +194,10 @@ async def run_generation_probe(
     output_dir: Path,
     *,
     include_baseline: bool = True,
+    keep_passing_audio: bool = True,
     request_timeout_seconds: float = PROBE_REQUEST_TIMEOUT_SECONDS,
 ) -> list[GenerationProbeResult]:
-    """Compare the same inputs and seeds; save partial audio even when a request fails."""
+    """Compare the same inputs and seeds; save partial audio even when a request fails, and without keep_passing_audio keep only the audio of pairs with an error."""
     if not cases or not seeds or request_timeout_seconds <= 0:
         raise ValueError("Cases, seeds, and a positive request timeout are required")
     elif (
@@ -218,6 +219,7 @@ async def run_generation_probe(
         for case in cases:
             for seed in seeds:
                 baseline: GenerationProbeResult | None = None
+                pair_start = len(results)
                 for policy in policies:
                     request = request_template.model_copy(
                         update={
@@ -278,6 +280,18 @@ async def run_generation_probe(
                     results.append(result)
                     report.write(result.model_dump_json() + "\n")
                     report.flush()
+                if not keep_passing_audio and not any(
+                    result.errors for result in results[pair_start:]
+                ):
+                    for index in range(pair_start, len(results)):
+                        audio_path = output_dir / f"{index:05d}.wav"
+                        audio_path.unlink()
+                        if stream:
+                            audio_path.with_suffix(".pcm").unlink()
+                        else:
+                            pass
+                else:
+                    pass
     return results
 
 

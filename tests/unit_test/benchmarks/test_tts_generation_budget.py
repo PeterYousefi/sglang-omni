@@ -157,6 +157,71 @@ async def test_paired_probe_only_fails_when_text_budget_is_below_natural_baselin
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True])
+async def test_probe_keeps_only_the_audio_of_failed_pairs(
+    tmp_path: Path, stream: bool
+) -> None:
+    bodies: list[dict[str, object]] = []
+    audio_buffer = io.BytesIO()
+    sf.write(audio_buffer, np.zeros(2400), 24000, format="WAV", subtype="PCM_16")
+    outcomes = {0: (("stop", 40), ("stop", 40)), 1: (("stop", 200), ("length", 125))}
+
+    def outcome() -> tuple[str, int]:
+        baseline, text = outcomes[int(bodies[-1]["seed"])]
+        return baseline if "max_new_tokens" in bodies[-1] else text
+
+    def answer(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            bodies.append(json.loads(request.content))
+            reason, frames = outcome()
+            return httpx.Response(
+                200,
+                content=bytes(4800) if stream else audio_buffer.getvalue(),
+                headers={
+                    "X-Sample-Rate": "24000",
+                    "X-SGLang-Omni-Speech-Id": "speech-1",
+                    "X-Finish-Reason": reason,
+                    "X-Completion-Tokens": str(frames),
+                },
+            )
+        reason, frames = outcome()
+        return httpx.Response(
+            200,
+            json={
+                "request_id": "speech-1",
+                "finish_reason": reason,
+                "usage": {"completion_tokens": frames},
+            },
+        )
+
+    output_dir = tmp_path / "probe"
+    async with httpx.AsyncClient(transport=httpx.MockTransport(answer)) as client:
+        results = await run_generation_probe(
+            client,
+            "http://test/v1",
+            CreateSpeechRequest(input="unused"),
+            [GenerationProbeCase(id="short", input="Hi.", language="English")],
+            range(2),
+            stream,
+            output_dir,
+            keep_passing_audio=False,
+        )
+    assert [bool(result.errors) for result in results] == [False, False, False, True]
+    kept = sorted(path.name for path in output_dir.iterdir())
+    if stream:
+        assert kept == [
+            "00002.pcm",
+            "00002.wav",
+            "00003.pcm",
+            "00003.wav",
+            "results.jsonl",
+        ]
+    else:
+        assert kept == ["00002.wav", "00003.wav", "results.jsonl"]
+    assert len((output_dir / "results.jsonl").read_text().splitlines()) == 4
+
+
+@pytest.mark.asyncio
 async def test_probe_retains_audio_when_outcome_lookup_fails(tmp_path: Path) -> None:
     def answer(request: httpx.Request) -> httpx.Response:
         if request.method == "POST":

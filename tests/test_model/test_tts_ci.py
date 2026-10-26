@@ -848,6 +848,7 @@ def test_qwen3_tts_repeated_short_speech_budget(
                 range(8),
                 stream,
                 output_dir,
+                keep_passing_audio=False,
             )
         failures = [result.model_dump() for result in results if result.errors]
         assert not failures, f"Generation-budget failures: {failures}"
