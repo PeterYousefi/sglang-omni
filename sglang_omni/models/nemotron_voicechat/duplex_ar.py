@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 import torch
 from sglang.srt.managers.schedule_batch import ScheduleBatch
 from sglang.srt.managers.scheduler import GenerationBatchResult
-from sglang.srt.model_executor.forward_batch_info import ForwardBatch
+from sglang.srt.model_executor.forward_batch_info import ForwardBatch, ForwardMode
 from transformers import PreTrainedTokenizerBase
 
 from sglang_omni.admission import ContextExhaustedError
@@ -43,7 +43,7 @@ from sglang_omni.scheduling.sglang_backend.ar_session import (
 )
 from sglang_omni.scheduling.sglang_backend.output_processor import SGLangOutputProcessor
 from sglang_omni.scheduling.sglang_backend.request_data import SGLangARRequestData
-from sglang_omni.scheduling.types import SchedulerRequest
+from sglang_omni.scheduling.types import SchedulerOutput, SchedulerRequest
 
 
 @dataclass(kw_only=True)
@@ -98,14 +98,25 @@ def attach_fusion_rows(
     )
 
 
-class DuplexThinkerRunner(NemotronVoiceChatModelRunner):
-    def before_prefill(
-        self,
-        forward_batch: ForwardBatch,
-        schedule_batch: ScheduleBatch,
-        requests: list[SchedulerRequest],
-    ) -> None:
-        attach_fusion_rows(forward_batch, requests)
+class UnitDecodeMixin:
+    """Run one-position session units as DECODE so the decode graph replays."""
+
+    def build_forward_batch(
+        self, scheduler_output: SchedulerOutput
+    ) -> tuple[ForwardBatch | None, ScheduleBatch, bool] | None:
+        batch = scheduler_output.batch_data
+        # A unit appends one position behind its retained session KV, which is
+        # what a DECODE forward computes. Sessions run without the radix cache,
+        # so the hybrid thinker has no Mamba track state to carry over.
+        if any(length != 1 for length in batch.extend_lens) or 0 in batch.prefix_lens:
+            return super().build_forward_batch(scheduler_output)
+        else:
+            pass
+        batch.forward_mode = ForwardMode.DECODE
+        forward_batch, schedule_batch, _ = super().build_forward_batch(scheduler_output)
+        # The unit was admitted as an EXTEND; the scheduler retires it as one.
+        batch.forward_mode = ForwardMode.EXTEND
+        return forward_batch, schedule_batch, False
 
     def before_decode(
         self,
@@ -115,10 +126,26 @@ class DuplexThinkerRunner(NemotronVoiceChatModelRunner):
         *,
         is_lookahead: bool = False,
     ) -> None:
-        raise RuntimeError("VoiceChat session units must perform exactly one forward")
+        del forward_batch, schedule_batch, is_lookahead
+        rows = [
+            request.data.talker_model_inputs["duplex_history"].fusion_rows[-1][-1]
+            for request in requests
+        ]
+        self.model.fusion_buffer[: len(rows)] = torch.stack(rows)
+        self.model.fusion_mask[: len(rows)] = True
 
 
-class DuplexTalkerRunner(NemotronVoiceChatTalkerModelRunner):
+class DuplexThinkerRunner(UnitDecodeMixin, NemotronVoiceChatModelRunner):
+    def before_prefill(
+        self,
+        forward_batch: ForwardBatch,
+        schedule_batch: ScheduleBatch,
+        requests: list[SchedulerRequest],
+    ) -> None:
+        attach_fusion_rows(forward_batch, requests)
+
+
+class DuplexTalkerRunner(UnitDecodeMixin, NemotronVoiceChatTalkerModelRunner):
     def __init__(
         self, tp_worker: ModelWorker, output_processor: SGLangOutputProcessor
     ) -> None:
@@ -192,15 +219,14 @@ class DuplexTalkerRunner(NemotronVoiceChatTalkerModelRunner):
                 index
             )
 
-    def before_decode(
+    def post_decode(
         self,
+        result: GenerationBatchResult,
         forward_batch: ForwardBatch,
         schedule_batch: ScheduleBatch,
         requests: list[SchedulerRequest],
-        *,
-        is_lookahead: bool = False,
     ) -> None:
-        raise RuntimeError("VoiceChat session units must perform exactly one forward")
+        self.post_prefill(result, forward_batch, schedule_batch, requests)
 
 
 class FrameAdapter(ARSessionAdapter):
