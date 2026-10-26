@@ -500,12 +500,15 @@ def fragment_chunk(
     start = 0
     while start < len(encoded):
         fragment = replace(chunk, seq=seq, payload=b"")
-        end = (
-            start
-            + max_chunk_bytes
-            - wire_size(fragment.to_dict())
-            - MSGPACK_BIN32_HEADER_GROWTH
-        )
+        envelope_bytes = wire_size(fragment.to_dict()) + MSGPACK_BIN32_HEADER_GROWTH
+        if max_chunk_bytes <= envelope_bytes:
+            raise ValueError(
+                f"max_chunk_bytes {max_chunk_bytes} leaves no room for a fragment's "
+                f"payload past its {envelope_bytes}-byte envelope"
+            )
+        else:
+            pass
+        end = start + max_chunk_bytes - envelope_bytes
         yield replace(fragment, payload=encoded[start:end]), end < len(encoded)
         start = end
         seq += 1

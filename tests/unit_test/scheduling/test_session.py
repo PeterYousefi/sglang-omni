@@ -17,6 +17,7 @@ from sglang.srt.sampling.sampling_params import SamplingParams
 from sglang_omni.admission import ContextExhaustedError, QueueFullError
 from sglang_omni.proto import OmniRequest, StagePayload
 from sglang_omni.proto.session import (
+    MSGPACK_BIN32_HEADER_GROWTH,
     SESSION_METADATA_KEY,
     OutputChunk,
     ResourceUsage,
@@ -313,6 +314,19 @@ def test_a_chunk_splits_into_fragments_within_max_chunk_bytes():
     assert b"".join(fragment.payload for fragment, _ in fragments) == msgpack.packb(
         chunk.to_dict(), use_bin_type=True
     )
+
+
+def test_a_limit_with_no_room_past_the_fragment_envelope_fails():
+    """A limit no larger than a fragment's envelope split the chunk into empty fragments forever."""
+    chunk = unit(1, 10_000)
+    envelope_bytes = (
+        wire_size(replace(chunk, seq=7, payload=b"").to_dict())
+        + MSGPACK_BIN32_HEADER_GROWTH
+    )
+    with pytest.raises(ValueError, match="no room for a fragment's payload"):
+        next(fragment_chunk(chunk, 7, envelope_bytes))
+    fragment, _ = next(fragment_chunk(chunk, 7, envelope_bytes + 1))
+    assert len(fragment.payload) == 1
 
 
 def test_the_first_stage_restores_a_chunk_from_its_fragments_for_the_append():
