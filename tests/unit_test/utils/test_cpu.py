@@ -125,11 +125,15 @@ def test_gpu_local_affinity(
 
 
 @pytest.mark.parametrize("local_cpu_text", ["0-3,8,10-11", None, "invalid"])
+@pytest.mark.parametrize("domain", [0, 0x10000])
 def test_gpu_cpu_locality_uses_sysfs_without_changing_thread_affinity(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, local_cpu_text: str | None
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    local_cpu_text: str | None,
+    domain: int,
 ) -> None:
-    """NVML's affinity query transiently moved the caller outside its reserved CPUs."""
-    local_cpu_file = tmp_path / "0000:01:00.0" / "local_cpulist"
+    """A truncated PCI domain can select another device's CPU locality."""
+    local_cpu_file = tmp_path / f"{domain:04x}:01:00.0" / "local_cpulist"
     if local_cpu_text is not None:
         write(local_cpu_file, local_cpu_text)
     else:
@@ -142,7 +146,9 @@ def test_gpu_cpu_locality_uses_sysfs_without_changing_thread_affinity(
     nvml = SimpleNamespace(
         nvmlInit=lambda: None,
         nvmlShutdown=lambda: None,
-        nvmlDeviceGetPciInfo=lambda handle: SimpleNamespace(busId=b"00000000:01:00.0"),
+        nvmlDeviceGetPciInfo=lambda handle: SimpleNamespace(
+            busId=f"{domain:08x}:01:00.0".encode()
+        ),
         nvmlDeviceGetCpuAffinity=nvml_affinity,
     )
     monkeypatch.setattr(cpu, "PCI_DEVICES_ROOT", tmp_path)

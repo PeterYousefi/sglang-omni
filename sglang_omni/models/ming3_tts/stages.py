@@ -4,7 +4,9 @@
 from __future__ import annotations
 
 import base64
+import copy
 import json
+import logging
 import queue
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -53,7 +55,10 @@ from sglang_omni.modules.ming_audio.vae.configuration_audio_vae import AudioVAEc
 from sglang_omni.modules.ming_audio.vae.modeling_audio_vae import AudioVAE
 from sglang_omni.proto.request import StagePayload
 from sglang_omni.scheduling.bootstrap import create_sglang_infrastructure
-from sglang_omni.scheduling.generation_batch_policy import CudaGraphBackend
+from sglang_omni.scheduling.generation_batch_policy import (
+    CudaGraphBackend,
+    operator_selected_prefill_backend,
+)
 from sglang_omni.scheduling.omni_scheduler import OmniScheduler
 from sglang_omni.scheduling.reference_encoder import (
     KeyedReferenceEncodeHook,
@@ -68,6 +73,8 @@ from sglang_omni.utils.audio import decode_audio_data_uri, load_audio
 from sglang_omni.utils.audio_features import cached_fbank
 from sglang_omni.utils.checkpoint import resolve_checkpoint
 from sglang_omni.utils.device import resolve_concrete_device
+
+logger = logging.getLogger(__name__)
 
 INSTRUCTION_PREFIX = (
     "<role>HUMAN</role>Please generate speech based on the following description."
@@ -249,13 +256,24 @@ def load_prefixed_weights(checkpoint: Path, prefix: str) -> dict[str, torch.Tens
     return weights
 
 
-def load_audio_vae(checkpoint: Path, device: torch.device) -> tuple[AudioVAE, int]:
+def load_audio_vae(
+    checkpoint: Path,
+    device: torch.device,
+    *,
+    component: Literal["encoder", "decoder"] | None = None,
+) -> tuple[AudioVAE, int]:
     """Load the bfloat16 AudioVAE with SDPA attention and its sample rate."""
     vae_configuration = audio_section(load_checkpoint_config(checkpoint))
     for codec_section in ("enc_kwargs", "dec_kwargs"):
         vae_configuration[codec_section]["backbone"]["_attn_implementation"] = "sdpa"
     vae = AudioVAE(AudioVAEconfig(**vae_configuration)).eval()
     vae.load_state_dict(load_prefixed_weights(checkpoint, VOCODER_WEIGHT_PREFIX))
+    if component == "encoder":
+        vae.decoder = None
+    elif component == "decoder":
+        vae.encoder = None
+    else:
+        pass
     vae.to(device=device, dtype=torch.bfloat16)
     return vae, int(vae_configuration["sample_rate"])
 
@@ -369,10 +387,18 @@ def create_preprocessing_executor(
     *,
     max_concurrency: int,
     reference_cache_entries: int,
+    reference_cache_bytes: int,
+    max_reference_seconds: float,
     device: str | None = None,
     gpu_id: int | None = None,
 ) -> SimpleScheduler:
-    if max_concurrency < 1:
+    if (
+        reference_cache_entries < 0
+        or reference_cache_bytes < 1
+        or max_reference_seconds <= 0
+    ):
+        raise ValueError("Ming 3 TTS reference cache and duration limits are invalid")
+    elif max_concurrency < 1:
         raise ValueError("Ming 3 TTS preprocessing max_concurrency must be positive")
     else:
         pass
@@ -388,7 +414,9 @@ def create_preprocessing_executor(
     if dense:
         validate_dense_tokenizer(tokenizer)
         resolved_device = resolve_concrete_device(device, gpu_id)
-        prompt_vae, _sample_rate = load_audio_vae(checkpoint, resolved_device)
+        prompt_vae, _sample_rate = load_audio_vae(
+            checkpoint, resolved_device, component="encoder"
+        )
         prompt_aggregator = load_prompt_aggregator(
             checkpoint, configuration, resolved_device
         )
@@ -421,6 +449,12 @@ def create_preprocessing_executor(
         waveform = torch.from_numpy(
             load_audio(reference_audio, target_sample_rate=SPEAKER_SAMPLE_RATE)
         )
+        if waveform.numel() > max_reference_seconds * SPEAKER_SAMPLE_RATE:
+            raise ValueError(
+                f"Ming 3 TTS reference exceeds {max_reference_seconds:g} seconds"
+            )
+        else:
+            pass
         filterbank = cached_fbank(
             waveform[None],
             num_mel_bins=SPEAKER_MEL_BINS,
@@ -443,6 +477,12 @@ def create_preprocessing_executor(
         prompt_waveform = torch.from_numpy(
             load_audio(reference_audio, target_sample_rate=sample_rate)
         )
+        if prompt_waveform.numel() > max_reference_seconds * sample_rate:
+            raise ValueError(
+                f"Ming 3 TTS reference exceeds {max_reference_seconds:g} seconds"
+            )
+        else:
+            pass
         # note (rsi): a private generator seeded like torch.manual_seed draws the
         # same posterior noise without touching the process-wide RNG.
         if seed is None:
@@ -461,14 +501,14 @@ def create_preprocessing_executor(
 
     speaker_service = ReferenceEncodeService(
         SpeakerEmbeddingHook(encode_speaker, model_identity=str(checkpoint)),
-        max_items=reference_cache_entries,
-        max_bytes=None,
+        max_items=reference_cache_entries or 1,
+        max_bytes=reference_cache_bytes,
         log_prefix="Ming 3 TTS speaker cache",
     )
     latent_service = ReferenceEncodeService(
         PromptLatentHook(encode_prompt_latents, model_identity=str(checkpoint)),
-        max_items=reference_cache_entries,
-        max_bytes=None,
+        max_items=reference_cache_entries or 1,
+        max_bytes=reference_cache_bytes,
         log_prefix="Ming 3 TTS prompt latent cache",
     )
     # note (rsi): the CPU speaker encoder overlaps the GPU prompt-latent encode.
@@ -498,10 +538,19 @@ def create_preprocessing_executor(
             reference_text = reference.get("text") or None
             if dense and reference_text:
                 speaker_job = speaker_executor.submit(
-                    speaker_service.get_or_encode, reference_audio
+                    (
+                        speaker_service.get_or_encode
+                        if reference_cache_entries
+                        else encode_speaker
+                    ),
+                    reference_audio,
                 )
                 seed = payload.request.params.get("seed")
-                if seed is None or not isinstance(reference_audio, bytes):
+                if (
+                    not reference_cache_entries
+                    or seed is None
+                    or not isinstance(reference_audio, bytes)
+                ):
                     prompt = encode_prompt_latents(reference_audio, seed)
                 else:
                     prompt = latent_service.get_or_encode(
@@ -513,7 +562,11 @@ def create_preprocessing_executor(
                     )
                 speaker_embedding = speaker_job.result()
             else:
-                speaker_embedding = speaker_service.get_or_encode(reference_audio)
+                speaker_embedding = (
+                    speaker_service.get_or_encode(reference_audio)
+                    if reference_cache_entries
+                    else encode_speaker(reference_audio)
+                )
         if dense:
             payload.data = DenseSpeechInputs(
                 text=text,
@@ -537,7 +590,20 @@ def create_preprocessing_executor(
             )
         return payload
 
-    return SimpleScheduler(preprocess, max_concurrency=max_concurrency)
+    def shutdown() -> None:
+        speaker_executor.shutdown(wait=True)
+        speaker_service.close()
+        latent_service.close()
+        logger.info(
+            f"Ming 3 TTS speaker final reference encode stats: {speaker_service.stats()}"
+        )
+        logger.info(
+            f"Ming 3 TTS prompt latent final reference encode stats: {latent_service.stats()}"
+        )
+
+    return SimpleScheduler(
+        preprocess, max_concurrency=max_concurrency, shutdown_callback=shutdown
+    )
 
 
 def create_tts_engine_executor(
@@ -548,6 +614,7 @@ def create_tts_engine_executor(
     prefill_graph_token_counts: list[int],
     prefill_graph_max_requests: int,
     enable_async_decode: bool,
+    enable_fused_flow_head: bool,
     device: str | None = None,
     gpu_id: int | None = None,
     tp_rank: int = 0,
@@ -590,29 +657,39 @@ def create_tts_engine_executor(
         maximum_decode_steps_limit = speech_config.maximum_decode_steps
         audio_patch_token_id = speech_config.audio_patch_token_id
         audio_end_token_id = speech_config.audio_end_token_id
-    overrides = dict(server_args_overrides or {})
+    overrides = copy.deepcopy(server_args_overrides or {})
     overrides.update(
         tp_size=tp_size,
         trust_remote_code=False,
         json_model_override_args=json.dumps({"architectures": [backbone_architecture]}),
         disable_radix_cache=True,
-        # note (rsi): a new prompt joins the running decode rows in one forward,
-        # so the batch samples their latents in a single acoustic step.
-        chunked_prefill_size=max_seq_len,
-        enable_mixed_chunk=True,
     )
+    overrides.setdefault("chunked_prefill_size", max_seq_len if dense else -1)
+    overrides.setdefault("enable_mixed_chunk", dense)
     if dense:
         # The checkpoint is bfloat16. SGLang otherwise downcasts a missing
         # dtype to float16, and this backbone overflows to NaN.
         overrides["dtype"] = "bfloat16"
         # note (rsi): prefill embeds through staged input rows, so it replays
         # one full CUDA graph per token bucket like the decode step.
-        overrides.setdefault("cuda_graph_backend_prefill", CudaGraphBackend.FULL)
-        overrides.setdefault("cuda_graph_bs_prefill", prefill_graph_token_counts)
-        overrides.setdefault(
-            "cuda_graph_config",
-            {"prefill": {"full_prefill_max_req": prefill_graph_max_requests}},
+        disables_prefill = overrides.get("disable_cuda_graph") or overrides.get(
+            "disable_prefill_cuda_graph"
         )
+        if not disables_prefill and prefill_graph_token_counts:
+            if not operator_selected_prefill_backend(overrides):
+                overrides.setdefault(
+                    "cuda_graph_backend_prefill", CudaGraphBackend.FULL
+                )
+            else:
+                pass
+            overrides.setdefault("cuda_graph_bs_prefill", prefill_graph_token_counts)
+            graph_config = overrides.setdefault("cuda_graph_config", {})
+            prefill_config = graph_config.setdefault("prefill", {})
+            prefill_config.setdefault(
+                "full_prefill_max_req", prefill_graph_max_requests
+            )
+        else:
+            pass
     else:
         pass
     server_args = build_sglang_server_args(
@@ -728,7 +805,11 @@ def create_tts_engine_executor(
     else:
         acoustic_graph_max_batch_size = None
     model_runner = Ming3TTSModelRunner(
-        worker, SGLangOutputProcessor(), stop_policy, acoustic_graph_max_batch_size
+        worker,
+        SGLangOutputProcessor(),
+        stop_policy,
+        acoustic_graph_max_batch_size,
+        enable_fused_flow_head=enable_fused_flow_head and dense,
     )
     return OmniScheduler(
         tp_worker=worker,

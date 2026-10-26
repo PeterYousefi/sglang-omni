@@ -3,7 +3,11 @@
 
 from __future__ import annotations
 
+import logging
+
 import torch
+
+logger = logging.getLogger(__name__)
 
 try:
     import triton
@@ -11,8 +15,9 @@ try:
     from sglang.kernels.numerics import mul_rn_f32
 
     HAS_TRITON = True
-except ImportError:  # pragma: no cover - depends on runtime image
+except ImportError as error:  # pragma: no cover - depends on runtime image
     HAS_TRITON = False
+    logger.info(f"Ming 3 TTS fused kernels unavailable: {error}")
 
 
 if HAS_TRITON:

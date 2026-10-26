@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from typing import ClassVar
@@ -33,6 +34,8 @@ from sglang_omni.models.ming3_tts.acoustic import (
 from sglang_omni.modules.ming_audio.flow.aggregator import Aggregator
 from sglang_omni.modules.ming_audio.flow.cfm import get_epss_timesteps
 from sglang_omni.modules.ming_audio.flow.flow_loss import FlowLoss
+
+logger = logging.getLogger(__name__)
 
 BACKBONE_WEIGHT_PREFIX = "model."
 VOCODER_WEIGHT_PREFIX = "audio."
@@ -143,6 +146,9 @@ def install_speech_heads(
         FLOW_STEPS, module.stop_head.weight.device, torch.float32
     )
     module.acoustic_graphs = {}
+    module.enable_fused_flow_head = False
+    module.flow_head_path_logged = False
+    module.weights_loaded = False
     module.flow_head_projections = None
     # note (chenyang): decode reads feedback rows from a fixed table by
     # row id, so the backbone CUDA graph replays them through input_ids.
@@ -159,20 +165,23 @@ def install_speech_heads(
     module.decode_feedback_rows = torch.arange(
         decode_batch_capacity, device=module.decode_feedback.weight.device
     )
-    # note (rsi): prefill reads its input rows from a fixed table by row id
-    # too, so a prefill CUDA graph that embeds input_ids replays the rows the
-    # runner staged; token embeddings are taken from the weight directly.
-    schedule = get_schedule()
-    prefill_capacity = (
-        max(schedule.max_prefill_tokens, schedule.chunked_prefill_size)
-        + decode_batch_capacity
-    )
-    module.prefill_inputs = nn.Embedding(prefill_capacity, config.hidden_size)
-    module.prefill_inputs.weight.requires_grad_(False)
-    module.prefill_input_rows = torch.arange(
-        prefill_capacity, device=module.prefill_inputs.weight.device
-    )
-    module.get_input_embeddings().forward = module.prefill_inputs.forward
+    if isinstance(config, Ming3DenseTTSConfig):
+        # note (rsi): prefill reads its input rows from a fixed table by row id
+        # too, so a prefill CUDA graph that embeds input_ids replays the rows the
+        # runner staged; token embeddings are taken from the weight directly.
+        schedule = get_schedule()
+        prefill_capacity = (
+            max(schedule.max_prefill_tokens, schedule.chunked_prefill_size)
+            + decode_batch_capacity
+        )
+        module.prefill_inputs = nn.Embedding(prefill_capacity, config.hidden_size)
+        module.prefill_inputs.weight.requires_grad_(False)
+        module.prefill_input_rows = torch.arange(
+            prefill_capacity, device=module.prefill_inputs.weight.device
+        )
+        module.get_input_embeddings().forward = module.prefill_inputs.forward
+    else:
+        pass
 
 
 @dataclass(kw_only=True)
@@ -189,6 +198,9 @@ class AcousticGraph:
 class SpeechHeadModel:
     """Flow, stop, and feedback heads shared by the MoE and dense backbones."""
 
+    enable_fused_flow_head: bool
+    flow_head_path_logged: bool
+    weights_loaded: bool
     flowloss: FlowLoss
     linear_proj_audio: Aggregator
     stop_head: nn.Linear
@@ -226,7 +238,17 @@ class SpeechHeadModel:
 
     def build_flow_constants(self, batch_size: int) -> FlowConstants | None:
         """Return None when the flow head must run its own module forwards."""
-        if not can_fuse_flow_head(self.flowloss, self.linear_proj_audio):
+        use_fused = self.enable_fused_flow_head and can_fuse_flow_head(
+            self.flowloss, self.linear_proj_audio
+        )
+        if not self.flow_head_path_logged:
+            logger.info(
+                f"Ming 3 TTS acoustic flow head: {'fused' if use_fused else 'module'}"
+            )
+            self.flow_head_path_logged = True
+        else:
+            pass
+        if not use_fused:
             return None
         elif self.flow_head_projections is None:
             # note (rsi): packed after load_weights filled the q, k, v projections.
@@ -327,6 +349,12 @@ class SpeechHeadModel:
         )
 
     def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]) -> set[str]:
+        if self.weights_loaded:
+            raise RuntimeError(
+                "Ming 3 TTS live weight updates are unsupported; restart the pipeline to refresh reference caches and acoustic graphs"
+            )
+        else:
+            pass
         head_tensors = {
             name: tensor
             for name, tensor in self.state_dict(keep_vars=True).items()
@@ -356,6 +384,7 @@ class SpeechHeadModel:
             raise ValueError(f"Missing Ming 3 TTS head weights: {missing_head_names}")
         else:
             pass
+        self.weights_loaded = True
         return loaded_names | loaded_head_names
 
 

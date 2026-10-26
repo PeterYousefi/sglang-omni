@@ -3,18 +3,27 @@
 
 from __future__ import annotations
 
+import logging
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
 import torch
 from transformers import Qwen2Model
 
-from sglang_omni.models.ming3_tts.stages import load_audio_vae
+from sglang_omni.models.ming3_tts.stages import (
+    SpeechConfig,
+    is_dense_checkpoint,
+    load_audio_vae,
+    load_checkpoint_config,
+)
 from sglang_omni.proto.request import StagePayload
 from sglang_omni.scheduling.simple_scheduler import SimpleScheduler
 from sglang_omni.utils.audio_payload import audio_waveform_payload
 from sglang_omni.utils.checkpoint import resolve_checkpoint
 from sglang_omni.utils.device import resolve_concrete_device
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(kw_only=True)
@@ -46,24 +55,27 @@ class DecoderGraphs:
             return
         else:
             pass
+        started = time.perf_counter()
         memory_pool = torch.cuda.graph_pool_handle()
         stream = torch.cuda.Stream(device=device)
+        frame_storage = torch.zeros(
+            hidden_size * max(frame_counts), device=device, dtype=torch.bfloat16
+        )
+        hidden_storage = torch.empty_like(frame_storage)
         with torch.inference_mode():
-            for frame_count in frame_counts:
-                frames = torch.zeros(
-                    (1, hidden_size, frame_count), device=device, dtype=torch.bfloat16
-                ).transpose(1, 2)
+            for frame_count in sorted(set(frame_counts), reverse=True):
+                frames = frame_storage.as_strided(
+                    (1, frame_count, hidden_size),
+                    (hidden_size * frame_count, 1, frame_count),
+                )
                 stream.wait_stream(torch.cuda.current_stream(device))
                 with torch.cuda.stream(stream):
                     eager_states = transformer(
                         inputs_embeds=frames, use_cache=False
                     ).last_hidden_state
                 torch.cuda.current_stream(device).wait_stream(stream)
-                hidden_states = torch.empty_strided(
-                    eager_states.shape,
-                    eager_states.stride(),
-                    device=device,
-                    dtype=eager_states.dtype,
+                hidden_states = hidden_storage.as_strided(
+                    eager_states.shape, eager_states.stride()
                 )
                 graph = torch.cuda.CUDAGraph()
                 with torch.cuda.graph(
@@ -80,6 +92,12 @@ class DecoderGraphs:
                 self.graphs[frame_count] = DecoderGraph(
                     graph=graph, frames=frames, hidden_states=hidden_states
                 )
+        buffer_bytes = (
+            frame_storage.numel() + hidden_storage.numel()
+        ) * frame_storage.element_size()
+        logger.info(
+            f"Ming 3 TTS vocoder graph setup: {len(self.graphs)} graphs, {time.perf_counter() - started:.3f}s, {buffer_bytes} shared buffer bytes"
+        )
 
     def run(self, frames: torch.Tensor) -> torch.Tensor:
         """Return the transformer output; an uncaptured frame count runs eagerly."""
@@ -103,7 +121,17 @@ def create_vocoder_executor(
 ) -> SimpleScheduler:
     resolved_device = resolve_concrete_device(device, gpu_id)
     checkpoint = Path(resolve_checkpoint(model_path))
-    vae, sample_rate = load_audio_vae(checkpoint, resolved_device)
+    configuration = load_checkpoint_config(checkpoint)
+    if not is_dense_checkpoint(configuration):
+        graph_latent_steps = min(
+            graph_latent_steps,
+            SpeechConfig.model_validate(
+                configuration["tts_config"]
+            ).maximum_decode_steps,
+        )
+    else:
+        pass
+    vae, sample_rate = load_audio_vae(checkpoint, resolved_device, component="decoder")
     decoder = vae.decoder
     frames_per_latent = decoder.upsampling.scale_factor
     # note (rsi): every length up to graph_latent_steps is captured before
