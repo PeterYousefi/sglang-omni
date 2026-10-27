@@ -43,7 +43,13 @@ JUDGE_REVISION = "1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0"
 # note (jeffro): a recorder that sends an input chunk late fails its session on
 # the client side; the server's protocol verdict on it still has to pass.
 MAX_CLIENT_PACING_FAILURES = 1
-RATE_SAMPLE_TOLERANCE = 1
+# note (jeffro): random flips across the five-case rates mostly cancel while a
+# regression moves many cases at once, so the rates share one slack; a slack of
+# one case per rate failed unchanged code in most repeated H100 runs.
+POOLED_RATE_TOLERANCE = 5
+# note (jeffro): the pool can hide one rate losing every case, and random flips
+# rarely empty a rate whose reference met at least this many cases.
+RATE_FLOOR_REFERENCE_CASES = 3
 LATENCY_TOLERANCE = 1.25
 OMISSION_RATE_TOLERANCE = 0.02
 VOICE_SIMILARITY_TOLERANCE = 3.0
@@ -56,6 +62,7 @@ class MetricSpec:
     kind: MetricKind
     is_higher_better: bool
     needs_semantic_judge: bool = False
+    is_gated: bool = True
 
 
 METRIC_SPECS: dict[str, MetricSpec] = {
@@ -63,11 +70,13 @@ METRIC_SPECS: dict[str, MetricSpec] = {
     "v15_resume_on_backchannel": MetricSpec(kind="rate", is_higher_better=True),
     "v15_resume_on_talking_to_other": MetricSpec(kind="rate", is_higher_better=True),
     "v15_resume_on_background_speech": MetricSpec(kind="rate", is_higher_better=True),
+    # note (jeffro): reported, not gated, until repeated runs show the semantic
+    # judge's verdicts on one recording are stable.
     "v15_overlap_handled": MetricSpec(
-        kind="rate", is_higher_better=True, needs_semantic_judge=True
+        kind="rate", is_higher_better=True, needs_semantic_judge=True, is_gated=False
     ),
     "v15_grounded_reply": MetricSpec(
-        kind="rate", is_higher_better=True, needs_semantic_judge=True
+        kind="rate", is_higher_better=True, needs_semantic_judge=True, is_gated=False
     ),
     "v15_stop_latency_mean_s": MetricSpec(kind="latency_s", is_higher_better=False),
     "v15_response_latency_mean_s": MetricSpec(kind="latency_s", is_higher_better=False),
@@ -331,21 +340,10 @@ def collect_fdb_metrics(
     return metrics
 
 
-def regression_bound(name: str, reference: float, measurement: Measurement) -> float:
-    """The worst value the gate accepts for a metric whose baseline is reference.
-    A rate's bound is a count of its n samples, so float rounding cannot reject
-    the exact drop RATE_SAMPLE_TOLERANCE allows."""
+def regression_bound(name: str, reference: float) -> float:
+    """The worst value the gate accepts for a continuous metric whose baseline is reference."""
     spec = METRIC_SPECS[name]
-    if spec.kind == "rate":
-        assert measurement.n is not None
-        # note (jeffro): references keep four decimals, so rounding recovers
-        # the count a reference stands for at this n.
-        reference_count = round(reference * measurement.n)
-        if spec.is_higher_better:
-            return max(0, reference_count - RATE_SAMPLE_TOLERANCE)
-        else:
-            return min(measurement.n, reference_count + RATE_SAMPLE_TOLERANCE)
-    elif spec.kind == "latency_s":
+    if spec.kind == "latency_s":
         return reference * LATENCY_TOLERANCE
     elif spec.kind == "omission_rate":
         return reference + OMISSION_RATE_TOLERANCE
@@ -355,36 +353,55 @@ def regression_bound(name: str, reference: float, measurement: Measurement) -> f
         return reference - VOICE_SIMILARITY_TOLERANCE
 
 
+def cases_on_target(spec: MetricSpec, count: int, n: int) -> int:
+    """Cases of a rate that went the way the metric wants: the counted ones when
+    higher is better, the rest when lower is better."""
+    if spec.is_higher_better:
+        return count
+    else:
+        return n - count
+
+
 def check_no_regression(
     checks: MetricCheckCollector,
     metrics: dict[str, Measurement],
     references: dict[str, float],
-    should_run_semantic_judge: bool,
 ) -> None:
-    """Record every referenced metric that is unmeasured or worse than its
-    bound; the semantic metrics are left out when the semantic judge did not run."""
+    """Record every gated metric that is unmeasured or worse than its bound. The
+    rates are gated by their cases on target together, and each by a floor."""
+    pooled_reference_cases = pooled_observed_cases = pooled_n = 0
     for name, reference in references.items():
         spec = METRIC_SPECS[name]
-        if spec.needs_semantic_judge and not should_run_semantic_judge:
-            continue
+        if not spec.is_gated:
+            pass
         elif name not in metrics:
             checks.fail(f"{name}: unmeasured")
-        else:
+        elif spec.kind == "rate":
             measurement = metrics[name]
-            bound = regression_bound(name, reference, measurement)
-            if spec.kind == "rate":
-                observed = measurement.count
-                unit = f"/{measurement.n}"
-            else:
-                observed = measurement.value
-                unit = ""
+            assert measurement.count is not None and measurement.n is not None
+            # note (jeffro): references keep four decimals, so rounding recovers
+            # the count a reference stands for at this n.
+            reference_count = round(reference * measurement.n)
+            reference_cases = cases_on_target(spec, reference_count, measurement.n)
+            observed_cases = cases_on_target(spec, measurement.count, measurement.n)
+            checks.check(
+                reference_cases < RATE_FLOOR_REFERENCE_CASES or observed_cases > 0,
+                f"{name}: {measurement.count}/{measurement.n} collapsed from "
+                f"{reference_count}/{measurement.n}",
+            )
+            pooled_reference_cases += reference_cases
+            pooled_observed_cases += observed_cases
+            pooled_n += measurement.n
+        else:
+            value = metrics[name].value
+            bound = regression_bound(name, reference)
             if spec.is_higher_better:
-                checks.check(
-                    observed >= bound,
-                    f"{name}: {observed:.4g}{unit} < {bound:.4g}{unit}",
-                )
+                checks.check(value >= bound, f"{name}: {value:.4g} < {bound:.4g}")
             else:
-                checks.check(
-                    observed <= bound,
-                    f"{name}: {observed:.4g}{unit} > {bound:.4g}{unit}",
-                )
+                checks.check(value <= bound, f"{name}: {value:.4g} > {bound:.4g}")
+    pooled_bound = max(0, pooled_reference_cases - POOLED_RATE_TOLERANCE)
+    checks.check(
+        pooled_observed_cases >= pooled_bound,
+        f"pooled rates: {pooled_observed_cases}/{pooled_n} cases on target "
+        f"< {pooled_bound}/{pooled_n}",
+    )

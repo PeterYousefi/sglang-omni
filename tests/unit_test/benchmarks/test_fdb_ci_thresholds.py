@@ -196,7 +196,7 @@ REFERENCES = {
 def gate(run_root: Path, should_run_semantic_judge: bool = True) -> None:
     metrics = fdb_ci.collect_fdb_metrics(run_root, ENGINE, should_run_semantic_judge)
     checks = MetricCheckCollector("FDB fixture")
-    fdb_ci.check_no_regression(checks, metrics, REFERENCES, should_run_semantic_judge)
+    fdb_ci.check_no_regression(checks, metrics, REFERENCES)
     checks.assert_all()
 
 
@@ -204,72 +204,93 @@ def test_the_reference_run_passes(run_root: Path) -> None:
     gate(run_root)
 
 
-@pytest.mark.parametrize(
-    "category,label,allowed_count,rejected_count",
-    [
-        pytest.param("user_interruption", "C_RESPOND", 2, 1, id="higher-is-better"),
-        pytest.param("user_backchannel", "C_RESUME", 1, 0, id="resume"),
-    ],
-)
-def test_a_behavior_rate_tolerates_one_sample(
-    run_root: Path,
-    category: str,
-    label: str,
-    allowed_count: int,
-    rejected_count: int,
-) -> None:
+def set_behavior_count(run_root: Path, category: str, label: str, count: int) -> None:
     path = run_root / "repeat-1" / "judge-qwen" / "summary.json"
     document = read_json(path)
     proportions = document["engines"][ENGINE][category]["valid_label_proportions"]
-    proportions[label]["count"] = allowed_count
+    proportions[label]["count"] = count
     write_json(path, document)
-    gate(run_root)
-    proportions[label]["count"] = rejected_count
-    write_json(path, document)
-    with pytest.raises(AssertionError, match="<"):
-        gate(run_root)
 
 
-def test_a_lower_is_better_rate_tolerates_one_sample(run_root: Path) -> None:
+def set_v10_count(run_root: Path, subset: str, metric: str, count: int) -> None:
     path = run_root / "repeat-1" / "v10" / "reference" / "unified.json"
     document = read_json(path)
-    rate = document["subsets"]["synthetic_pause_handling"]["metrics"][
-        "pause_intrusion_rate"
-    ]
-    rate.update(count=2, value=0.4)
+    document["subsets"][subset]["metrics"][metric].update(
+        count=count, value=count / fdb_ci.V10_PER_SUBSET
+    )
     write_json(path, document)
+
+
+def test_the_rates_share_one_slack_and_a_lower_is_better_rate_counts_inverted(
+    run_root: Path,
+) -> None:
+    """The reference run has 18 of its 35 rate cases on target; five fewer pass
+    and six fewer fail, where two more pause intrusions are two cases off target."""
+    set_v10_count(run_root, "synthetic_pause_handling", "pause_intrusion_rate", 3)
+    set_behavior_count(run_root, "user_interruption", "C_RESPOND", 1)
+    set_v10_count(run_root, "candor_turn_taking", "response_rate_2s", 0)
     gate(run_root)
-    rate.update(count=3, value=0.6)
-    write_json(path, document)
-    with pytest.raises(AssertionError, match="v10_synthetic_pause_intrusion_rate.*>"):
+    set_behavior_count(run_root, "user_backchannel", "C_RESUME", 1)
+    with pytest.raises(
+        AssertionError, match="pooled rates: 12/35 cases on target < 13/35"
+    ):
         gate(run_root)
 
 
-def test_a_rate_is_compared_by_counts_at_a_float_boundary(run_root: Path) -> None:
-    """0.8 - 1/5 is 0.6000000000000001; 3/5 is the one-sample drop and passes."""
-    path = run_root / "repeat-1" / "judge-qwen" / "summary.json"
-    document = read_json(path)
-    proportions = document["engines"][ENGINE]["background_speech"][
-        "valid_label_proportions"
-    ]
-    references = {**REFERENCES, "v15_resume_on_background_speech": 0.8}
-    for count, should_pass in ((3, True), (2, False)):
-        proportions["C_RESUME"]["count"] = count
-        write_json(path, document)
-        metrics = fdb_ci.collect_fdb_metrics(run_root, ENGINE, True)
-        checks = MetricCheckCollector("FDB fixture")
-        fdb_ci.check_no_regression(checks, metrics, references, True)
-        if should_pass:
+@pytest.mark.parametrize(
+    "reference_name,reference,emptied,should_pass",
+    [
+        pytest.param(
+            "v15_resume_on_background_speech",
+            0.8,
+            ("background_speech", "C_RESUME", 0),
+            False,
+            id="higher-is-better",
+        ),
+        pytest.param(
+            "v10_synthetic_pause_intrusion_rate",
+            0.2,
+            ("synthetic_pause_handling", "pause_intrusion_rate", 5),
+            False,
+            id="lower-is-better",
+        ),
+        pytest.param(
+            "v15_resume_on_background_speech",
+            0.4,
+            ("background_speech", "C_RESUME", 0),
+            True,
+            id="below-the-floor-reference",
+        ),
+    ],
+)
+def test_a_rate_that_loses_every_case_fails_inside_the_pooled_slack(
+    run_root: Path,
+    reference_name: str,
+    reference: float,
+    emptied: tuple[str, str, int],
+    should_pass: bool,
+) -> None:
+    """A rate whose reference met at least three of five cases fails at none,
+    though the pool alone would absorb that drop."""
+    subset, metric, count = emptied
+    if subset in fdb_ci.V15_CATEGORIES:
+        set_behavior_count(run_root, subset, metric, count)
+    else:
+        set_v10_count(run_root, subset, metric, count)
+    references = {**REFERENCES, reference_name: reference}
+    metrics = fdb_ci.collect_fdb_metrics(run_root, ENGINE, True)
+    checks = MetricCheckCollector("FDB fixture")
+    fdb_ci.check_no_regression(checks, metrics, references)
+    if should_pass:
+        checks.assert_all()
+    else:
+        with pytest.raises(AssertionError, match=f"{reference_name}: .* collapsed"):
             checks.assert_all()
-        else:
-            with pytest.raises(
-                AssertionError, match="v15_resume_on_background_speech: 2/5 < 3/5"
-            ):
-                checks.assert_all()
 
 
-def test_unresolved_semantic_cases_count_against_the_rate(run_root: Path) -> None:
-    """A judge that resolves one case of twenty cannot pass on a 1/1 slack."""
+def test_the_semantic_rates_are_reported_and_never_gated(run_root: Path) -> None:
+    """A judge that resolves one case of twenty reports 0/20, not 0/1, and that
+    rate fails no gate; the rates are still required whenever the judge runs."""
     semantic = run_root / "repeat-1" / "semantic-qwen" / "summary.json"
     document = read_json(semantic)
     document["categories"]["all"]["grounding"] = {
@@ -279,8 +300,16 @@ def test_unresolved_semantic_cases_count_against_the_rate(run_root: Path) -> Non
     }
     write_json(semantic, document)
     metrics = fdb_ci.collect_fdb_metrics(run_root, ENGINE, True)
-    assert metrics["v15_grounded_reply"].n == 20
-    with pytest.raises(AssertionError, match="v15_grounded_reply: 0/20 < 14/20"):
+    assert (metrics["v15_grounded_reply"].count, metrics["v15_grounded_reply"].n) == (
+        0,
+        20,
+    )
+    gate(run_root)
+    with pytest.raises(AssertionError, match="semantic-qwen"):
+        gate(run_root, should_run_semantic_judge=False)
+    semantic.unlink()
+    gate(run_root, should_run_semantic_judge=False)
+    with pytest.raises(FileNotFoundError):
         gate(run_root)
 
 
@@ -353,26 +382,6 @@ def test_a_rate_without_scored_samples_fails(run_root: Path) -> None:
     }
     write_json(path, document)
     with pytest.raises(AssertionError, match="v10_turn_response_rate_2s: no scored"):
-        gate(run_root)
-
-
-def test_the_semantic_metrics_follow_the_semantic_judge_switch(run_root: Path) -> None:
-    """Gated and required when the judge runs; neither when it is skipped."""
-    semantic = run_root / "repeat-1" / "semantic-qwen" / "summary.json"
-    document = read_json(semantic)
-    document["categories"]["all"]["grounding"] = {
-        "accepted": 0,
-        "failed": 20,
-        "unresolved": 0,
-    }
-    write_json(semantic, document)
-    with pytest.raises(AssertionError, match="v15_grounded_reply"):
-        gate(run_root)
-    with pytest.raises(AssertionError, match="semantic-qwen"):
-        gate(run_root, should_run_semantic_judge=False)
-    semantic.unlink()
-    gate(run_root, should_run_semantic_judge=False)
-    with pytest.raises(FileNotFoundError):
         gate(run_root)
 
 

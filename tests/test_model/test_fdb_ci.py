@@ -11,7 +11,12 @@ import pytest
 
 from tests.test_model.fdb_ci_config import select_fdb_ci_preset
 from tests.utils import MetricCheckCollector
-from tests.utils.fdb_ci import check_no_regression, collect_fdb_metrics, run_fdb_ci
+from tests.utils.fdb_ci import (
+    METRIC_SPECS,
+    check_no_regression,
+    collect_fdb_metrics,
+    run_fdb_ci,
+)
 
 STRATEGY_NAME, PRESET = select_fdb_ci_preset()
 
@@ -29,12 +34,14 @@ def test_full_duplex_bench() -> None:
         rate = (
             "" if measurement.n is None else f" ({measurement.count}/{measurement.n})"
         )
-        print(f"  {name:36} {measurement.value:.4f}{rate}")
+        gating = "" if METRIC_SPECS[name].is_gated else ", reported only"
+        print(
+            f"  {name:36} {measurement.value:.4f}{rate}"
+            f"  reference {PRESET.references[name]:.4f}{gating}"
+        )
     checks = MetricCheckCollector(f"FDB {STRATEGY_NAME}")
     if PRESET.calibrated:
-        check_no_regression(
-            checks, metrics, PRESET.references, strategy.should_run_semantic_judge
-        )
+        check_no_regression(checks, metrics, PRESET.references)
     else:
         checks.fail(
             f"FDB {STRATEGY_NAME} references are uncalibrated; the metrics above "
