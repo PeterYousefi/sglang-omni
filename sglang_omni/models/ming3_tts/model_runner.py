@@ -18,7 +18,7 @@ from sglang_omni.model_runner.prefill_inputs import (
     attach_omni_prefill_inputs,
 )
 from sglang_omni.models.ming3_tts.acoustic import FLOW_STEPS, AcousticInputs
-from sglang_omni.models.ming3_tts.sglang_model import Ming3TTSModel
+from sglang_omni.models.ming3_tts.sglang_model import Ming3DenseTTSConfig, Ming3TTSModel
 from sglang_omni.scheduling.sglang_backend.output_processor import SGLangOutputProcessor
 from sglang_omni.scheduling.sglang_backend.request_data import SGLangARRequestData
 from sglang_omni.scheduling.types import SchedulerOutput, SchedulerRequest
@@ -87,8 +87,11 @@ class Ming3TTSModelRunner(ModelRunner):
         output_processor: SGLangOutputProcessor,
         stop_policy: StopPolicy,
         acoustic_graph_max_batch_size: int | None,
+        *,
+        enable_fused_flow_head: bool = False,
     ) -> None:
         super().__init__(tp_worker, output_processor)
+        self.model.enable_fused_flow_head = enable_fused_flow_head
         self.stop_policy: StopPolicy = stop_policy
         self.step_input_host_bufs: list[torch.Tensor] = []
         self.step_input_host_slot: int = 0
@@ -156,8 +159,11 @@ class Ming3TTSModelRunner(ModelRunner):
             )
         input_embeds = torch.cat(window_embeddings)
         token_count = input_embeds.shape[0]
-        self.model.prefill_inputs.weight[:token_count].copy_(input_embeds)
-        forward_batch.input_ids.copy_(self.model.prefill_input_rows[:token_count])
+        if isinstance(self.model.config, Ming3DenseTTSConfig):
+            self.model.prefill_inputs.weight[:token_count].copy_(input_embeds)
+            forward_batch.input_ids.copy_(self.model.prefill_input_rows[:token_count])
+        else:
+            pass
         attach_omni_prefill_inputs(
             forward_batch, OmniPrefillInputs(input_embeds=input_embeds)
         )

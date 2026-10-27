@@ -129,3 +129,8 @@ response = requests.post(
 response.raise_for_status()
 open("cloned.wav", "wb").write(response.content)
 ```
+
+
+## Deployment defaults
+
+Both Tiny and the dense 0.5B checkpoint use four preprocessing workers and native MPS in `auto` mode. Dense reference-prompt encoding runs on GPU; the speaker encoder remains on CPU. Set `mps: off` in the pipeline YAML to opt out of native MPS management. The native `auto`/`on` modes reject an inherited `CUDA_MPS_PIPE_DIRECTORY`; use `mps: off` with an externally managed daemon. Startup verifies the owned daemon and fails if it cannot be started or verified. Normal shutdown cleans it up; after a hard kill, an operator may need to remove the stale owner lease before restarting.

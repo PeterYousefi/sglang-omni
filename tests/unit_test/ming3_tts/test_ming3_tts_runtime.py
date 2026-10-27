@@ -12,7 +12,10 @@ import torch
 from sglang.srt.model_loader.utils import set_default_torch_dtype
 from torch import nn
 
+from sglang_omni.model_runner.prefill_inputs import get_omni_prefill_inputs
+from sglang_omni.models.ming3_tts import stages
 from sglang_omni.models.ming3_tts.acoustic import FLOW_STEPS, AcousticInputs
+from sglang_omni.models.ming3_tts.kernels import cfg_solver_step
 from sglang_omni.models.ming3_tts.model_config import build_audio_aggregator
 from sglang_omni.models.ming3_tts.model_runner import (
     LaunchedAcousticStep,
@@ -21,6 +24,7 @@ from sglang_omni.models.ming3_tts.model_runner import (
 )
 from sglang_omni.models.ming3_tts.sglang_model import (
     Ming3DenseTTSConfig,
+    Ming3TTSConfig,
     SpeechHeadModel,
     TinySpeechHeadModel,
 )
@@ -75,6 +79,9 @@ class TinySpeechHeads(SpeechHeadModel, nn.Module):
         self.flow_timesteps = get_epss_timesteps(FLOW_STEPS, device, torch.float32)
         self.acoustic_graphs = {}
         self.flow_head_projections = None
+        self.enable_fused_flow_head = True
+        self.flow_head_path_logged = False
+        self.weights_loaded = False
 
 
 def make_inputs(batch_size: int, device: torch.device) -> AcousticInputs:
@@ -215,15 +222,7 @@ def test_fused_flow_head_tracks_the_module_forward() -> None:
     assert feedback_error < 0.05 * reference.feedback_embeddings.float().abs().mean()
 
 
-@pytest.mark.parametrize(
-    "use_cuda", [pytest.param(True, marks=pytest.mark.accelerator), False]
-)
-def test_vocoder_graphs_match_eager_decode_bit_for_bit(use_cuda: bool) -> None:
-    if use_cuda:
-        require_cuda()
-        device = torch.device("cuda", torch.cuda.current_device())
-    else:
-        device = torch.device("cpu")
+def make_audio_vae(device: torch.device) -> AudioVAE:
     backbone = {
         "hidden_size": HIDDEN_SIZE,
         "intermediate_size": 128,
@@ -254,6 +253,19 @@ def test_vocoder_graphs_match_eager_decode_bit_for_bit(use_cuda: bool) -> None:
         )
     ).eval()
     vae.to(device=device, dtype=torch.bfloat16)
+    return vae
+
+
+@pytest.mark.parametrize(
+    "use_cuda", [pytest.param(True, marks=pytest.mark.accelerator), False]
+)
+def test_vocoder_graphs_match_eager_decode_bit_for_bit(use_cuda: bool) -> None:
+    if use_cuda:
+        require_cuda()
+        device = torch.device("cuda", torch.cuda.current_device())
+    else:
+        device = torch.device("cpu")
+    vae = make_audio_vae(device)
     decoder = vae.decoder
     # Captured lengths cover one, two, and five latents; others run eagerly.
     graphs = DecoderGraphs(
@@ -305,3 +317,145 @@ def test_reference_audio_reads_bytes_and_keeps_remote_urls(tmp_path: Path) -> No
     assert read_reference_audio({"audio_path": f"file://{path}"}) == audio
     remote = "https://example.com/reference.wav"
     assert read_reference_audio({"audio_path": remote}) == remote
+
+
+@pytest.mark.accelerator
+@pytest.mark.parametrize("add_noise", [True, False])
+def test_solver_kernel_matches_eager_arithmetic_exactly(add_noise: bool) -> None:
+    """Guidance, timestep and noise arithmetic must not hide under transformer tolerances."""
+    require_cuda()
+    generator = torch.Generator(device="cuda").manual_seed(327)
+    velocity = torch.randn(
+        (6, 1, LATENT_DIM), device="cuda", dtype=torch.bfloat16, generator=generator
+    )
+    sample = torch.randn((3, 1, LATENT_DIM), device="cuda", generator=generator)
+    guidance = torch.tensor([0.0, 1.25, 2.0], device="cuda")
+    noise_scale = torch.tensor([0.0, 0.25, 0.75], device="cuda")
+    step_size = torch.tensor([-0.125], device="cuda")
+    noise_step_scale = torch.tensor([0.375], device="cuda")
+    noise = torch.randn(sample.shape, device="cuda", generator=generator)
+    conditional, unconditional = velocity.chunk(2)
+    expected = sample + step_size * (
+        conditional + (conditional - unconditional) * guidance[:, None, None]
+    )
+    if add_noise:
+        expected = expected + noise_scale[:, None, None] * noise_step_scale * noise
+    else:
+        pass
+    actual = cfg_solver_step(
+        velocity,
+        sample,
+        guidance,
+        noise_scale,
+        step_size,
+        noise_step_scale,
+        noise,
+        add_noise,
+    )
+    assert torch.equal(actual, expected)
+
+
+@pytest.mark.accelerator
+@pytest.mark.parametrize("temperature", [0.0, 0.25, 1.0])
+def test_zero_velocity_solve_keeps_noise_timestep_and_temperature_scaling(
+    temperature: float,
+) -> None:
+    """Noise uses each current timestep and is omitted on the last solver step."""
+    require_cuda()
+    device = torch.device("cuda", torch.cuda.current_device())
+    heads = TinySpeechHeads(device)
+    heads.flowloss.cfm.model.final_layer.linear.weight.data.zero_()
+    heads.flowloss.cfm.model.final_layer.linear.bias.data.zero_()
+    inputs = make_inputs(2, device)
+    inputs.temperatures.fill_(temperature)
+    inputs.solver_noise.copy_(
+        torch.arange(1, FLOW_STEPS, device=device)[:, None, None, None]
+    )
+    timesteps = heads.flow_timesteps
+    timesteps = timesteps - (torch.cos(torch.pi / 2 * timesteps) - 1 + timesteps)
+    expected = inputs.initial_noise.transpose(1, 2).clone()
+    for step in range(FLOW_STEPS - 1):
+        expected = (
+            expected
+            + 0.25
+            * (temperature**0.5)
+            * abs(timesteps[step + 1] - timesteps[step]) ** 0.5
+            * inputs.solver_noise[step]
+        )
+    with torch.no_grad():
+        scales = heads.build_sampling_scales(2)
+        constants = heads.build_flow_constants(2)
+        actual = heads.compute_acoustic_step(inputs, scales, constants)
+    assert torch.equal(actual.latents, expected)
+
+
+def test_live_weight_updates_are_rejected_before_mutating_weights() -> None:
+    """Engine-only updates would leave preprocessing and captured constants stale."""
+    heads = TinySpeechHeads(torch.device("cpu"))
+    heads.weights_loaded = True
+    original = heads.stop_head.weight.clone()
+    with pytest.raises(RuntimeError, match="restart the pipeline"):
+        heads.load_weights([("stop_head.weight", torch.zeros_like(original))])
+    assert torch.equal(original, heads.stop_head.weight)
+
+
+@pytest.mark.parametrize(
+    "use_cuda", [pytest.param(True, marks=pytest.mark.accelerator), False]
+)
+def test_seeded_reference_encoding_matches_fresh_posterior_sample(
+    use_cuda: bool,
+) -> None:
+    """A private seeded posterior must equal a fresh encode without changing global RNG state."""
+    if use_cuda:
+        require_cuda()
+        device = torch.device("cuda", torch.cuda.current_device())
+    else:
+        device = torch.device("cpu")
+    vae = make_audio_vae(device)
+    waveform = torch.linspace(-0.5, 0.5, 1024)
+    with torch.inference_mode():
+        original_state = torch.random.get_rng_state()
+        first = stages.encode_reference_latents(
+            vae, waveform, device, torch.Generator(device=device).manual_seed(42)
+        )
+        repeated = stages.encode_reference_latents(
+            vae, waveform, device, torch.Generator(device=device).manual_seed(42)
+        )
+        changed = stages.encode_reference_latents(
+            vae, waveform, device, torch.Generator(device=device).manual_seed(43)
+        )
+    assert torch.equal(first, repeated)
+    assert not torch.equal(first, changed)
+    assert torch.equal(original_state, torch.random.get_rng_state())
+
+
+def test_tiny_prefill_preserves_token_ids_without_a_dense_graph_table() -> None:
+    """Dense prefill graph staging must not allocate or index a table for Tiny."""
+    runner = Ming3TTSModelRunner.__new__(Ming3TTSModelRunner)
+    runner.device = torch.device("cpu")
+    embeddings = nn.Embedding(16, HIDDEN_SIZE)
+    runner.model = SimpleNamespace(
+        config=Ming3TTSConfig(llm_config={"hidden_size": HIDDEN_SIZE}),
+        get_input_embeddings=lambda: embeddings,
+    )
+    input_ids = torch.tensor([1, 2, 3])
+    request = SimpleNamespace(
+        input_ids=input_ids,
+        latent_history=torch.zeros((1, LATENT_DIM)),
+        speaker_position=-1,
+        prompt_rows=None,
+        feedback_embeddings=[],
+    )
+    batch = SimpleNamespace(
+        input_ids=input_ids.clone(),
+        extend_prefix_lens_cpu=[0],
+        extend_seq_lens_cpu=[3],
+        replace_embeds=None,
+    )
+    runner.before_prefill(
+        batch, None, [SchedulerRequest(request_id="tiny", data=request)]
+    )
+    assert torch.equal(batch.input_ids, input_ids)
+    assert torch.equal(
+        get_omni_prefill_inputs(batch).input_embeds, embeddings(input_ids)
+    )

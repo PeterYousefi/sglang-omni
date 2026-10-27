@@ -3,9 +3,10 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import ClassVar, Literal
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from sglang_omni.config.schema import (
     EngineArgs,
@@ -15,18 +16,24 @@ from sglang_omni.config.schema import (
     PlacementConfig,
     StageConfig,
 )
+from sglang_omni.utils.hf import try_resolve_ming3_dense_tts
 
 PACKAGE = "sglang_omni.models.ming3_tts"
 
 
-def default_stages() -> list[StageConfig]:
+def default_stages(dense: bool = False) -> list[StageConfig]:
     return [
         StageConfig(
             name="preprocessing",
             process="preprocessing",
             gpu=0,
             factory_path=f"{PACKAGE}.stages.create_preprocessing_executor",
-            factory=FactoryArgs(max_concurrency=4, reference_cache_entries=256),
+            factory=FactoryArgs(
+                max_concurrency=4,
+                reference_cache_entries=256,
+                reference_cache_bytes=64 * 1024 * 1024,
+                max_reference_seconds=120.0 if dense else None,
+            ),
             next="tts_engine",
         ),
         EngineStageConfig(
@@ -37,20 +44,23 @@ def default_stages() -> list[StageConfig]:
             factory=FactoryArgs(
                 max_seq_len=4096,
                 enable_acoustic_graph=True,
-                prefill_graph_token_counts=[
-                    64,
-                    96,
-                    128,
-                    160,
-                    192,
-                    224,
-                    256,
-                    288,
-                    320,
-                    384,
-                    448,
-                    512,
-                ],
+                enable_fused_flow_head=dense,
+                prefill_graph_token_counts=(
+                    [
+                        64,
+                        96,
+                        128,
+                        160,
+                        192,
+                        224,
+                        256,
+                        288,
+                        320,
+                        384,
+                        448,
+                        512,
+                    ]
+                ),
                 prefill_graph_max_requests=32,
                 enable_async_decode=True,
             ),
@@ -85,8 +95,6 @@ class Ming3TTSPipelineConfig(PipelineConfig):
     }
     model_path: str
     entry_stage: str = "preprocessing"
-    # note (rsi): the three stage processes share one GPU; MPS runs their
-    # kernels concurrently instead of time-slicing the device between them.
     mps: Literal["off", "on", "auto"] = "auto"
     placement: PlacementConfig = Field(
         default_factory=lambda: PlacementConfig(
@@ -94,6 +102,32 @@ class Ming3TTSPipelineConfig(PipelineConfig):
         )
     )
     stages: list[StageConfig] = Field(default_factory=default_stages)
+
+    @model_validator(mode="before")
+    @classmethod
+    def select_checkpoint_defaults(cls, data: object) -> object:
+        """Select checkpoint defaults while preserving explicit overrides."""
+        if not isinstance(data, dict) or not isinstance(data.get("model_path"), str):
+            return data
+        elif "stages" in data and "mps" in data:
+            return data
+        else:
+            pass
+        model_path = data["model_path"]
+        if Path(model_path).is_dir():
+            repo_id, revision = model_path, None
+        else:
+            repo_id, separator, pinned_revision = model_path.partition("@")
+            revision = pinned_revision if separator else None
+        dense = (
+            try_resolve_ming3_dense_tts(repo_id, revision=revision)
+            == DENSE_ARCHITECTURE
+        )
+        return {
+            "stages": default_stages(dense),
+            "mps": "auto",
+            **data,
+        }
 
 
 EntryClass = Ming3TTSPipelineConfig

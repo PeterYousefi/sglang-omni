@@ -217,10 +217,10 @@ def pci_local_cpus(bus_id: str | bytes) -> set[int] | None:
         bus_id = bus_id.decode()
     else:
         pass
-    # NVML writes an eight-digit PCI domain; sysfs names use four.
+    # Sysfs uses a minimum of four hex digits for the PCI domain.
     domain, _colon, address = bus_id.lower().partition(":")
-    path = PCI_DEVICES_ROOT / f"{domain[-4:]}:{address}" / "local_cpulist"
     try:
+        path = PCI_DEVICES_ROOT / f"{int(domain, 16):04x}:{address}" / "local_cpulist"
         return parse_cpu_list(path.read_text())
     except (OSError, ValueError):
         return None
@@ -242,9 +242,7 @@ def gpu_local_cpus(logical_gpu_ids: Iterable[int]) -> set[int]:
             handle = get_device_handle(
                 pynvml, resolve_visible_device_id(gpu_id, visible)
             )
-            # note (rsi): NVML's affinity query is the device's local CPU list,
-            # but it gets there by moving the calling thread onto every CPU in
-            # turn, out of any reserved set; sysfs answers without moving it.
+            # note (rsi): use the kernel's local CPU list, falling back to NVML.
             local_cpus = pci_local_cpus(pynvml.nvmlDeviceGetPciInfo(handle).busId)
             if local_cpus is not None:
                 cpus.update(local_cpus)

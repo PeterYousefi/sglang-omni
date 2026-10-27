@@ -111,6 +111,9 @@ def install_speech_heads(
         FLOW_STEPS, module.stop_head.weight.device, torch.float32
     )
     module.acoustic_graphs = {}
+    module.enable_fused_flow_head = False
+    module.flow_head_path_logged = False
+    module.weights_loaded = False
     module.flow_head_projections = None
     module.native_capture = None
     # note (chenyang): decode reads feedback rows from a fixed table by

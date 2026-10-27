@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterable, Iterator
 
 import torch
@@ -34,6 +35,8 @@ from sglang_omni.models.ming3_tts.native_acoustic import NativeAcousticCapture
 from sglang_omni.modules.ming_audio.flow.aggregator import Aggregator
 from sglang_omni.modules.ming_audio.flow.flow_loss import FlowLoss
 
+logger = logging.getLogger(__name__)
+
 BACKBONE_WEIGHT_PREFIX = "model."
 VOCODER_WEIGHT_PREFIX = "audio."
 AGGREGATOR_WEIGHT_PREFIX = "linear_proj_audio."
@@ -53,6 +56,9 @@ EXACT_ACOUSTIC_BUCKETS = 16
 class SpeechHeadModel:
     """Flow, stop, and feedback heads shared by the MoE and dense backbones."""
 
+    enable_fused_flow_head: bool
+    flow_head_path_logged: bool
+    weights_loaded: bool
     flowloss: FlowLoss
     linear_proj_audio: Aggregator
     stop_head: nn.Linear
@@ -91,7 +97,17 @@ class SpeechHeadModel:
 
     def build_flow_constants(self, batch_size: int) -> FlowConstants | None:
         """Return None when the flow head must run its own module forwards."""
-        if not can_fuse_flow_head(self.flowloss, self.linear_proj_audio):
+        use_fused = self.enable_fused_flow_head and can_fuse_flow_head(
+            self.flowloss, self.linear_proj_audio
+        )
+        if not self.flow_head_path_logged:
+            logger.info(
+                f"Ming 3 TTS acoustic flow head: {'fused' if use_fused else 'module'}"
+            )
+            self.flow_head_path_logged = True
+        else:
+            pass
+        if not use_fused:
             return None
         elif self.flow_head_projections is None:
             # note (rsi): packed after load_weights filled the q, k, v projections.
@@ -193,6 +209,12 @@ class SpeechHeadModel:
         )
 
     def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]) -> set[str]:
+        if self.weights_loaded:
+            raise RuntimeError(
+                "Ming 3 TTS live weight updates are unsupported; restart the pipeline to refresh reference caches and acoustic graphs"
+            )
+        else:
+            pass
         head_tensors = {
             name: tensor
             for name, tensor in self.state_dict(keep_vars=True).items()
@@ -222,6 +244,7 @@ class SpeechHeadModel:
             raise ValueError(f"Missing Ming 3 TTS head weights: {missing_head_names}")
         else:
             pass
+        self.weights_loaded = True
         return loaded_names | loaded_head_names
 
 
