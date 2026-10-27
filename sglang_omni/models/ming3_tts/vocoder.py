@@ -11,7 +11,7 @@ from pathlib import Path
 import torch
 from transformers import Qwen2Model
 
-from sglang_omni.models.ming3_tts.stages import (
+from sglang_omni.models.ming3_tts.checkpoint import (
     SpeechConfig,
     is_dense_checkpoint,
     load_audio_vae,
@@ -115,7 +115,7 @@ class DecoderGraphs:
 def create_vocoder_executor(
     model_path: str,
     *,
-    graph_latent_steps: int,
+    graph_latent_steps: int = 0,
     device: str | None = None,
     gpu_id: int | None = None,
 ) -> SimpleScheduler:
@@ -166,6 +166,7 @@ def create_vocoder_executor(
             last_chunk=False,
         )
         usage = payload.data["usage"]
+        finish_reason = payload.data["finish_reason"]
         payload.data = audio_waveform_payload(
             waveform.float().cpu(),
             sample_rate=sample_rate,
@@ -173,6 +174,7 @@ def create_vocoder_executor(
             source_hint="Ming-3.0-TTS",
         )
         payload.data["usage"] = usage
+        payload.data["finish_reason"] = finish_reason
         return payload
 
     return SimpleScheduler(decode)

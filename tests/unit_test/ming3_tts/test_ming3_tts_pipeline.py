@@ -2,6 +2,7 @@
 """Pipeline registration and backbone configuration contracts."""
 
 import base64
+import inspect
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -19,6 +20,7 @@ from sglang_omni.models.ming3_tts.stages import (
     PromptLatentHook,
     PromptLatentInput,
 )
+from sglang_omni.models.ming3_tts.vocoder import create_vocoder_executor
 from sglang_omni.models.model_capabilities import get_model_capabilities
 from sglang_omni.models.registry import PIPELINE_CONFIG_REGISTRY
 from sglang_omni.proto.request import OmniRequest, StagePayload
@@ -279,3 +281,16 @@ def test_preprocessing_cache_bypasses_unseeded_prompts_and_urls(
         scheduler.stop()
     assert prompt_encodes == ([42, 43, None, None, 42, 42] if cache_entries else seeds)
     assert len(speaker_encodes) == (3 if cache_entries else 7)
+
+
+def test_legacy_explicit_stage_factories_accept_previous_arguments() -> None:
+    """Saved explicit stage configurations must remain callable after an upgrade."""
+
+    inspect.signature(stages.create_preprocessing_executor).bind(
+        model_path="checkpoint"
+    )
+    inspect.signature(stages.create_tts_engine_executor).bind(
+        model_path="checkpoint", max_seq_len=4096, enable_acoustic_graph=True
+    )
+    inspect.signature(stages.create_vocoder_executor).bind(model_path="checkpoint")
+    assert stages.create_vocoder_executor is create_vocoder_executor

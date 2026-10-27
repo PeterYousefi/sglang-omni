@@ -32,7 +32,7 @@ def default_stages(dense: bool = False) -> list[StageConfig]:
                 max_concurrency=4 if dense else 1,
                 reference_cache_entries=256,
                 reference_cache_bytes=64 * 1024 * 1024,
-                max_reference_seconds=120.0,
+                max_reference_seconds=120.0 if dense else None,
             ),
             next="tts_engine",
         ),
