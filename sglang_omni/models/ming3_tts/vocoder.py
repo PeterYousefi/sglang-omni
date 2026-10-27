@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Ming 3 TTS vocoder stage: AudioVAE decode with the decoder transformer as CUDA graphs."""
+"""Ming 3 vocoding with non-streaming CUDA graphs and streaming caches."""
 
 from __future__ import annotations
 
@@ -17,6 +17,7 @@ from sglang_omni.models.ming3_tts.checkpoint import (
     load_audio_vae,
     load_checkpoint_config,
 )
+from sglang_omni.models.ming3_tts.streaming_vocoder import Ming3StreamingVocoder
 from sglang_omni.models.ming3_tts.vocoder_graph import VocoderGraphRunner
 from sglang_omni.proto.request import StagePayload
 from sglang_omni.scheduling.simple_scheduler import SimpleScheduler
@@ -117,13 +118,15 @@ def create_vocoder_executor(
     model_path: str,
     *,
     graph_latent_steps: int = 0,
+    stream_chunk_steps: int = 8,
     device: str | None = None,
     gpu_id: int | None = None,
-) -> SimpleScheduler:
+) -> Ming3StreamingVocoder | SimpleScheduler:
     resolved_device = resolve_concrete_device(device, gpu_id)
     checkpoint = Path(resolve_checkpoint(model_path))
     configuration = load_checkpoint_config(checkpoint)
-    if not is_dense_checkpoint(configuration):
+    dense = is_dense_checkpoint(configuration)
+    if not dense:
         graph_latent_steps = min(
             graph_latent_steps,
             SpeechConfig.model_validate(
@@ -137,14 +140,9 @@ def create_vocoder_executor(
     frames_per_latent = decoder.upsampling.scale_factor
     # note (rsi): every length up to graph_latent_steps is captured before
     # serving, so no request pays a capture or a new cuDNN attention plan.
-    configuration = load_checkpoint_config(checkpoint)
-    dense = is_dense_checkpoint(configuration)
     full_graphs: VocoderGraphRunner | None = None
     if not dense and resolved_device.type == "cuda":
-        speech_config = SpeechConfig.model_validate(configuration["tts_config"])
-        full_graphs = VocoderGraphRunner(
-            vae, min(graph_latent_steps, speech_config.maximum_decode_steps)
-        )
+        full_graphs = VocoderGraphRunner(vae, graph_latent_steps)
     else:
         pass
     decoder_graphs = DecoderGraphs(
@@ -193,4 +191,12 @@ def create_vocoder_executor(
         payload.data["finish_reason"] = finish_reason
         return payload
 
-    return SimpleScheduler(decode)
+    if resolved_device.type == "cpu":
+        return SimpleScheduler(decode)
+    else:
+        return Ming3StreamingVocoder(
+            decode,
+            vae=vae,
+            sample_rate=sample_rate,
+            stream_chunk_steps=stream_chunk_steps,
+        )
