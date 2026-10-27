@@ -125,8 +125,12 @@ def run_root(tmp_path: Path) -> Path:
         {
             "categories": {
                 "all": {
-                    "interaction_handling": {"accepted": 10, "failed": 10},
-                    "grounding": {"accepted": 15, "failed": 5},
+                    "interaction_handling": {
+                        "accepted": 10,
+                        "failed": 10,
+                        "unresolved": 0,
+                    },
+                    "grounding": {"accepted": 15, "failed": 5, "unresolved": 0},
                 }
             }
         },
@@ -241,6 +245,45 @@ def test_a_lower_is_better_rate_tolerates_one_sample(run_root: Path) -> None:
         gate(run_root)
 
 
+def test_a_rate_is_compared_by_counts_at_a_float_boundary(run_root: Path) -> None:
+    """0.8 - 1/5 is 0.6000000000000001; 3/5 is the one-sample drop and passes."""
+    path = run_root / "repeat-1" / "judge-qwen" / "summary.json"
+    document = read_json(path)
+    proportions = document["engines"][ENGINE]["background_speech"][
+        "valid_label_proportions"
+    ]
+    references = {**REFERENCES, "v15_resume_on_background_speech": 0.8}
+    for count, should_pass in ((3, True), (2, False)):
+        proportions["C_RESUME"]["count"] = count
+        write_json(path, document)
+        metrics = fdb_ci.collect_fdb_metrics(run_root, ENGINE, True)
+        checks = MetricCheckCollector("FDB fixture")
+        fdb_ci.check_no_regression(checks, metrics, references, True)
+        if should_pass:
+            checks.assert_all()
+        else:
+            with pytest.raises(
+                AssertionError, match="v15_resume_on_background_speech: 2/5 < 3/5"
+            ):
+                checks.assert_all()
+
+
+def test_unresolved_semantic_cases_count_against_the_rate(run_root: Path) -> None:
+    """A judge that resolves one case of twenty cannot pass on a 1/1 slack."""
+    semantic = run_root / "repeat-1" / "semantic-qwen" / "summary.json"
+    document = read_json(semantic)
+    document["categories"]["all"]["grounding"] = {
+        "accepted": 0,
+        "failed": 1,
+        "unresolved": 19,
+    }
+    write_json(semantic, document)
+    metrics = fdb_ci.collect_fdb_metrics(run_root, ENGINE, True)
+    assert metrics["v15_grounded_reply"].n == 20
+    with pytest.raises(AssertionError, match="v15_grounded_reply: 0/20 < 14/20"):
+        gate(run_root)
+
+
 @pytest.mark.parametrize("metric", ["latency_stop_list", "latency_resp_list"])
 def test_latency_gate_rejects_regression(run_root: Path, metric: str) -> None:
     samples = run_root / "repeat-1" / "scores" / "engines" / ENGINE / "samples"
@@ -317,7 +360,11 @@ def test_the_semantic_metrics_follow_the_semantic_judge_switch(run_root: Path) -
     """Gated and required when the judge runs; neither when it is skipped."""
     semantic = run_root / "repeat-1" / "semantic-qwen" / "summary.json"
     document = read_json(semantic)
-    document["categories"]["all"]["grounding"] = {"accepted": 0, "failed": 20}
+    document["categories"]["all"]["grounding"] = {
+        "accepted": 0,
+        "failed": 20,
+        "unresolved": 0,
+    }
     write_json(semantic, document)
     with pytest.raises(AssertionError, match="v15_grounded_reply"):
         gate(run_root)

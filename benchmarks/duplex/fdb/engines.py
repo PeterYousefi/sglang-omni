@@ -71,8 +71,10 @@ ENGINES: dict[EngineName, Engine] = {
         launch_config="examples/qwen3_omni/session_h100.yaml",
         hf_model_ids=("Qwen/Qwen3-Omni-30B-A3B-Instruct",),
         server_gpu_count=2,
+        # note (jeffro): the launch config owns the capacity and explains it;
+        # this copy only sizes --num-shards, and a unit test keeps them equal.
         max_sessions=4,
-        sets_max_sessions=True,
+        sets_max_sessions=False,
         needs_aligner=False,
     ),
     "cascade": Engine(

@@ -270,8 +270,15 @@ def collect_fdb_metrics(
     if should_run_semantic_judge:
         axes = read_json(semantic_path)["categories"]["all"]
         for name, axis in SEMANTIC_METRICS.items():
-            accepted, failed = axes[axis]["accepted"], axes[axis]["failed"]
-            metrics[name] = rate_measurement(name, accepted, accepted + failed)
+            # note (jeffro): an unresolved case counts against the rate; left
+            # out, a judge that resolves almost nothing would shrink n until
+            # the one-case slack lets any result pass.
+            counts = axes[axis]
+            metrics[name] = rate_measurement(
+                name,
+                counts["accepted"],
+                counts["accepted"] + counts["failed"] + counts["unresolved"],
+            )
     else:
         assert not semantic_path.exists(), f"{semantic_path} exists"
 
@@ -325,13 +332,19 @@ def collect_fdb_metrics(
 
 
 def regression_bound(name: str, reference: float, measurement: Measurement) -> float:
-    """The worst value the gate accepts for a metric whose baseline is reference."""
+    """The worst value the gate accepts for a metric whose baseline is reference.
+    A rate's bound is a count of its n samples, so float rounding cannot reject
+    the exact drop RATE_SAMPLE_TOLERANCE allows."""
     spec = METRIC_SPECS[name]
-    direction = 1.0 if spec.is_higher_better else -1.0
     if spec.kind == "rate":
         assert measurement.n is not None
-        slack = RATE_SAMPLE_TOLERANCE / measurement.n
-        return min(1.0, max(0.0, reference - direction * slack))
+        # note (jeffro): references keep four decimals, so rounding recovers
+        # the count a reference stands for at this n.
+        reference_count = round(reference * measurement.n)
+        if spec.is_higher_better:
+            return max(0, reference_count - RATE_SAMPLE_TOLERANCE)
+        else:
+            return min(measurement.n, reference_count + RATE_SAMPLE_TOLERANCE)
     elif spec.kind == "latency_s":
         return reference * LATENCY_TOLERANCE
     elif spec.kind == "omission_rate":
@@ -356,15 +369,22 @@ def check_no_regression(
             continue
         elif name not in metrics:
             checks.fail(f"{name}: unmeasured")
-        elif spec.is_higher_better:
-            bound = regression_bound(name, reference, metrics[name])
-            checks.check(
-                metrics[name].value >= bound,
-                f"{name}: {metrics[name].value:.4g} < {bound:.4g}",
-            )
         else:
-            bound = regression_bound(name, reference, metrics[name])
-            checks.check(
-                metrics[name].value <= bound,
-                f"{name}: {metrics[name].value:.4g} > {bound:.4g}",
-            )
+            measurement = metrics[name]
+            bound = regression_bound(name, reference, measurement)
+            if spec.kind == "rate":
+                observed = measurement.count
+                unit = f"/{measurement.n}"
+            else:
+                observed = measurement.value
+                unit = ""
+            if spec.is_higher_better:
+                checks.check(
+                    observed >= bound,
+                    f"{name}: {observed:.4g}{unit} < {bound:.4g}{unit}",
+                )
+            else:
+                checks.check(
+                    observed <= bound,
+                    f"{name}: {observed:.4g}{unit} > {bound:.4g}{unit}",
+                )

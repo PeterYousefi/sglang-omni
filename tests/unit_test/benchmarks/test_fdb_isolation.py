@@ -203,7 +203,8 @@ def test_model_server_command_launches_the_engine_launch_config(
     engine_name: str,
     config_cls: type[AudioSessionPipelineConfig],
 ) -> None:
-    """Each turn-based engine's launch config loads as its session pipeline."""
+    """Each turn-based engine's launch config loads as its session pipeline and
+    admits exactly the sessions the runbook sizes --num-shards by."""
     monkeypatch.setenv("ENGINE", engine_name)
     launch_server = Mock()
     monkeypatch.setattr("sglang_omni.cli.serve.launch_server", launch_server)
@@ -212,7 +213,10 @@ def test_model_server_command_launches_the_engine_launch_config(
     result = CliRunner().invoke(app, server_command[server_command.index("serve") :])
 
     assert result.exit_code == 0, result.output
-    assert type(launch_server.call_args.args[0]) is config_cls
+    config = launch_server.call_args.args[0]
+    assert type(config) is config_cls
+    assert "--max_sessions" not in server_command
+    assert config.max_sessions == ENGINES[engine_name].max_sessions
 
 
 def test_a_multi_gpu_engine_runs_one_server_on_every_visible_gpu(

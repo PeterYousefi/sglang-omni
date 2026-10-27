@@ -11,11 +11,15 @@
 # encoder take GPU 0 and the talker and code2wav GPU 1. The audio encoder runs on
 # GPU 1 as well: across inputs of varying length it grows past twice its
 # budget, and GPU 1 keeps over 40 GB free while GPU 0 keeps about 6 GB.
-# max_sessions: a session retains at most max_seq_len (32768) thinker tokens
-# of KV, and the thinker's KV pool at these fractions holds 83,502 tokens.
+# max_sessions: the thinker's KV pool at these fractions holds 83,502 tokens,
+# and a session retains at most max_seq_len (32768) thinker tokens, so two
+# full-length conversations fit. This file sets four for short conversations
+# such as the Full-Duplex-Bench CI's, whose sessions stay far below 20,875
+# tokens each (83,502 / 4); four recorded its 60 sessions in about 4 minutes
+# without a failure, where two took 8. Set 2 for full-length conversations.
 config_cls: Qwen3OmniSessionPipelineConfig
 model_path: Qwen/Qwen3-Omni-30B-A3B-Instruct
-max_sessions: 2
+max_sessions: 4
 
 stages:
   image_encoder:
