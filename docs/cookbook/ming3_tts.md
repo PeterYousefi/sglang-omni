@@ -20,7 +20,7 @@ sgl-omni serve --model-path inclusionAI/Ming-3.0-tts-tiny
 sgl-omni serve --model-path inclusionAI/Ming-3.0-tts-0.5B
 ```
 
-The speech endpoint is `POST /v1/audio/speech`. The body is one complete waveform. `stream=true` still waits until that waveform is finished, then returns it as a single PCM body. The requests below are the same for both servers. Set `model` to the checkpoint id used at startup. The examples use `inclusionAI/Ming-3.0-tts-tiny`.
+The speech endpoint is `POST /v1/audio/speech`. With `stream=false`, the response is one complete waveform. On CUDA deployments, `stream=true` makes both Tiny and 0.5B return incremental PCM audio as it becomes available; short utterances may only produce audio when synthesis finishes. Streaming uses request-local incremental AudioVAE cache slots, and ready requests share a batched decoder step. The default decoder group is 8 latents; this is an audio chunk size, not a wall-clock first-packet guarantee. Non-streaming requests retain full-sequence decoding, including CUDA graphs when configured. The requests below are the same for both servers. Set `model` to the checkpoint id used at startup. The examples use `inclusionAI/Ming-3.0-tts-tiny`.
 
 ## Zero-shot speech
 
@@ -129,3 +129,8 @@ response = requests.post(
 response.raise_for_status()
 open("cloned.wav", "wb").write(response.content)
 ```
+
+
+## Deployment defaults
+
+The dense 0.5B checkpoint uses GPU preprocessing with four workers and native MPS in `auto` mode. Tiny keeps CPU preprocessing, one worker and MPS disabled. Set `mps: off` in the pipeline YAML to opt out of native MPS management. The native `auto`/`on` modes reject an inherited `CUDA_MPS_PIPE_DIRECTORY`; use `mps: off` with an externally managed daemon. Startup verifies the owned daemon and fails if it cannot be started or verified. Normal shutdown cleans it up; after a hard kill, an operator may need to remove the stale owner lease before restarting.
