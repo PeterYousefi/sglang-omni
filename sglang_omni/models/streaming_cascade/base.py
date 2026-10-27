@@ -32,6 +32,8 @@ from sglang_omni.scheduling.session import ChunkEmitter
 
 if TYPE_CHECKING:
     from sglang_omni.models.streaming_cascade.config import ComponentGraphConfig
+else:
+    pass
 
 SPEECH_SAMPLE_RATE_HZ = 24000
 PROBE_TIMEOUT_S = 10.0

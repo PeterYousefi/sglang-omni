@@ -41,6 +41,8 @@ from sglang_omni.scheduling.session import ChunkEmitter
 
 if TYPE_CHECKING:
     from sglang_omni.models.streaming_cascade.config import ComponentGraphConfig
+else:
+    pass
 
 logger = logging.getLogger(__name__)
 
