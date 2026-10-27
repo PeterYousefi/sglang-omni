@@ -82,12 +82,12 @@ ENGINES: dict[EngineName, Engine] = {
         record_profile="turn-based",
         launch_config=(
             "examples/streaming_cascade/profiles/"
-            "qwen3-asr-qwen3.8-27b-customvoice/launch.yaml"
+            "qwen3-asr-qwen3.8-27b-vivian/launch.yaml"
         ),
         hf_model_ids=(
             "Qwen/Qwen3.8-27B",
             "Qwen/Qwen3-ASR-1.7B",
-            "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice",
+            "Qwen/Qwen3-TTS-12Hz-1.7B-Base",
             "Qwen/Qwen3-ForcedAligner-0.6B",
         ),
         server_gpu_count=2,

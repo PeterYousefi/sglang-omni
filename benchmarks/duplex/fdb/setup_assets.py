@@ -86,6 +86,7 @@ ALIGNER_PACKAGES = [
     "msgspec==0.22.0",
     "numpy==2.5.4",
     "pydantic==2.14.1",
+    "regex==2026.9.29",
     "websockets==17.3",
 ]
 SERVING_DISTRIBUTION = "sglang-omni"
