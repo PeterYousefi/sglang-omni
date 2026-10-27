@@ -186,8 +186,9 @@ def test_engine_factory_honors_operator_prefill_and_mixed_chunk_overrides(
 
 
 @pytest.mark.parametrize("cache_entries", [0, 16])
+@pytest.mark.parametrize("device", [None, "cpu"])
 def test_preprocessing_cache_bypasses_unseeded_prompts_and_urls(
-    monkeypatch: pytest.MonkeyPatch, cache_entries: int
+    monkeypatch: pytest.MonkeyPatch, cache_entries: int, device: str | None
 ) -> None:
     """Unseeded/remote references must encode afresh; zero entries must bypass both caches."""
     prompt_encodes: list[int | None] = []
@@ -203,9 +204,11 @@ def test_preprocessing_cache_bypasses_unseeded_prompts_and_urls(
     )
     monkeypatch.setattr(stages, "get_tokenizer", lambda *arguments, **keywords: None)
     monkeypatch.setattr(stages, "validate_dense_tokenizer", lambda tokenizer: None)
-    monkeypatch.setattr(
-        stages, "load_audio_vae", lambda *arguments, **keywords: (None, 44100)
-    )
+    def load_audio_vae(checkpoint, resolved_device, *, component):
+        assert resolved_device == torch.device("cpu")
+        return None, 44100
+
+    monkeypatch.setattr(stages, "load_audio_vae", load_audio_vae)
     monkeypatch.setattr(
         stages, "load_prompt_aggregator", lambda *arguments: nn.Identity()
     )
@@ -250,7 +253,7 @@ def test_preprocessing_cache_bypasses_unseeded_prompts_and_urls(
         reference_cache_entries=cache_entries,
         reference_cache_bytes=1024,
         max_reference_seconds=120,
-        device="cpu",
+        device=device,
     )
     reference = {"data": base64.b64encode(b"audio").decode(), "text": "prompt"}
     seeds = [42, 42, 43, None, None, 42, 42]

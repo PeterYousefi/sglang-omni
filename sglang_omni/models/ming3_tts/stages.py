@@ -333,7 +333,8 @@ def create_preprocessing_executor(
     tokenizer = get_tokenizer(str(checkpoint), trust_remote_code=False)
     if dense:
         validate_dense_tokenizer(tokenizer)
-        resolved_device = resolve_concrete_device(device, gpu_id)
+        preprocessing_device = "cpu" if device is None and gpu_id is None else device
+        resolved_device = resolve_concrete_device(preprocessing_device, gpu_id)
         prompt_vae, _sample_rate = load_audio_vae(
             checkpoint, resolved_device, component="encoder"
         )
