@@ -5,7 +5,7 @@ import logging
 import math
 from collections import deque
 from collections.abc import AsyncIterator
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from pydantic import Field
 
@@ -38,6 +38,9 @@ from sglang_omni.proto.streams import (
     control_type,
 )
 from sglang_omni.scheduling.session import ChunkEmitter
+
+if TYPE_CHECKING:
+    from sglang_omni.models.streaming_cascade.config import ComponentGraphConfig
 
 logger = logging.getLogger(__name__)
 
@@ -107,9 +110,9 @@ class Dialog(StreamComponent):
     reply stays in the history only up to the last sentence whose audio the
     graph delivered (`reply.delivered`), and a client `truncate` of that
     reply's turn moves the cut back to what the listener heard; from then on
-    each cut is published as reply.heard. The next reply after an
-    interrupted one begins once the delivered audio or a truncate bounds the
-    cut, so its prompt holds what could have been heard of it, and these
+    each cut is published as reply.heard. In a graph that sends audio, the
+    next reply after an interrupted one begins once the delivered audio or a
+    truncate bounds the cut, so its prompt holds what could have been heard of it, and these
     reports keep cutting the ended reply until a later reply ends, other
     than one interrupted before its first text, so one that arrives after
     the next reply began still cuts the history later prompts read. A reply
@@ -150,6 +153,11 @@ class Dialog(StreamComponent):
         self.language: str | None = None
         # note (luojiaxuan): From a speech.started to the speech.stopped or commit that ends the utterance; the node that reports speech also stops it at the end of the input.
         self.is_user_speaking = False
+        # note (luojiaxuan): Whether the graph reports the audio it delivered of a reply this dialog interrupts; a graph without audio does not.
+        self.awaits_delivery = True
+
+    def place(self, settings: "ComponentGraphConfig", name: str) -> None:
+        self.awaits_delivery = bool(settings.delivery_reporters(name))
 
     def adopt(self, previous: StreamComponent) -> None:
         if isinstance(previous, Dialog):
@@ -291,7 +299,11 @@ class Dialog(StreamComponent):
         while (
             self.reply is None
             and self.waiting
-            and (self.delivered_ms is not None or self.heard_ms is not None)
+            and (
+                not self.awaits_delivery
+                or self.delivered_ms is not None
+                or self.heard_ms is not None
+            )
         ):
             for output in self.respond(*self.waiting.popleft()):
                 self.emit(output)

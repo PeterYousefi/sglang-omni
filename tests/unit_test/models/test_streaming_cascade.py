@@ -1060,6 +1060,40 @@ publish: {dialog: [session], llm: [text_delta, session]}
 """
 
 
+TEXT_ONLY_STOPPABLE = TEXT_ONLY.replace(
+    "inputs: [asr, llm]}",
+    "inputs: [asr, llm, {kind: control, source: input, event: interrupt}]}",
+)
+
+
+@pytest.mark.asyncio
+async def test_a_dialog_without_audio_answers_the_next_utterance_after_a_cancelled_reply():
+    """A graph that sends no audio never reports reply.delivered, so the next reply must not wait for it."""
+    settings = ComponentGraphConfig.model_validate(yaml.safe_load(TEXT_ONLY_STOPPABLE))
+    assert settings.delivery_reporters("dialog") == []
+    dialog = build({"kind": "dialog"})
+    dialog.place(settings, "dialog")
+    outputs = await drain(
+        dialog,
+        [
+            transcript_chunk("question", True),
+            text_chunk(REPLY, 1),
+            lambda: dialog.control(control_chunk(INTERRUPT)),
+            transcript_chunk("next", True),
+        ],
+    )
+    assert prompts(outputs)[-1] == [
+        ("system", dialog.config.system_prompt),
+        ("user", "question next"),
+    ]
+
+
+def test_the_profile_dialog_waits_for_the_audio_its_synthesizer_delivered():
+    assert profile_config(
+        "qwen3-asr-qwen3.8-27b-vivian"
+    ).component_graph().delivery_reporters("dialog") == ["tts"]
+
+
 def test_profile_graph_turns_formats_and_ports():
     settings = declared().component_graph()
     assert [n.name for n in settings.nodes if n.opens_turns] == ["dialog"]
