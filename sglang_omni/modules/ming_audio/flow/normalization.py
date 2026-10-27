@@ -27,7 +27,8 @@ VOCODER_RMS_ROW_TILE = 4
 
 
 class TensorSquare(Protocol):
-    def __call__(self, hidden_states: torch.Tensor, /) -> torch.Tensor: ...
+    def __call__(self, hidden_states: torch.Tensor, /) -> torch.Tensor:
+        raise NotImplementedError
 
 
 class NormalizationAffine(Protocol):
@@ -38,7 +39,8 @@ class NormalizationAffine(Protocol):
         weight: torch.Tensor,
         epsilon: float,
         /,
-    ) -> torch.Tensor: ...
+    ) -> torch.Tensor:
+        raise NotImplementedError
 
 
 class RowNormalization(Protocol):
@@ -48,7 +50,8 @@ class RowNormalization(Protocol):
         weight: torch.Tensor,
         epsilon: float,
         /,
-    ) -> torch.Tensor: ...
+    ) -> torch.Tensor:
+        raise NotImplementedError
 
 
 @dataclass(frozen=True, kw_only=True)

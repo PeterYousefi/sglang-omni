@@ -17,7 +17,8 @@ from sglang_omni.platforms.interface import JointRopeInplaceKernel
 
 
 class TensorTransform(Protocol):
-    def __call__(self, tensor: torch.Tensor, /) -> torch.Tensor: ...
+    def __call__(self, tensor: torch.Tensor, /) -> torch.Tensor:
+        raise NotImplementedError
 
 
 class SharedRotaryTransform(Protocol):
@@ -29,7 +30,8 @@ class SharedRotaryTransform(Protocol):
         scale: float | torch.Tensor,
         *,
         materialize_output: bool = True,
-    ) -> torch.Tensor: ...
+    ) -> torch.Tensor:
+        raise NotImplementedError
 
 
 @dataclass(frozen=True)
