@@ -291,6 +291,10 @@ def test_first_packet_waits_for_lookahead(vocoder: Ming3StreamingVocoder) -> Non
     assert any(message.type == "stream" for message in vocoder.outbox.queue)
 
 
+@pytest.mark.accelerator
+@pytest.mark.skipif(
+    not torch.cuda.is_available(), reason="CUDA graph routing requires CUDA"
+)
 @torch.inference_mode()
 def test_nonstream_keeps_graph_dispatch_and_stream_uses_cache(
     vocoder: Ming3StreamingVocoder, monkeypatch: pytest.MonkeyPatch
@@ -306,13 +310,13 @@ def test_nonstream_keeps_graph_dispatch_and_stream_uses_cache(
     monkeypatch.setattr(
         factory_module, "load_audio_vae", lambda *args, **kwargs: (vocoder.vae, 44100)
     )
-    vocoder.vae.bfloat16()
+    vocoder.vae.to(device="cuda", dtype=torch.bfloat16)
     original = factory_module.DecoderGraphs.run
     with patch.object(
         factory_module.DecoderGraphs, "run", autospec=True, side_effect=original
     ) as full_decode:
         scheduler = factory_module.create_vocoder_executor(
-            "model", graph_latent_steps=8, device="cpu"
+            "model", graph_latent_steps=8, device="cuda"
         )
         latents = torch.randn(17, 1, 4, generator=torch.Generator().manual_seed(3))
         payload = StagePayload(
@@ -320,7 +324,14 @@ def test_nonstream_keeps_graph_dispatch_and_stream_uses_cache(
             OmniRequest("text", params={"stream": False}),
             {"latents": latents, "usage": {}, "finish_reason": "length"},
         )
-        result = scheduler.fn(payload)
+        scheduler.handle_new_request_batch(
+            [IncomingMessage(request_id="full", type="new_request", data=payload)]
+        )
+        result = next(
+            message.data
+            for message in scheduler.outbox.queue
+            if message.type == "result"
+        )
         assert result.data["finish_reason"] == "length"
         assert full_decode.call_count == 1
         for index, latent in enumerate(latents):
@@ -335,3 +346,31 @@ def test_nonstream_keeps_graph_dispatch_and_stream_uses_cache(
         scheduler.handle_stream_done("stream")
         assert full_decode.call_count == 1
         assert "stream" not in scheduler.stream_states
+
+
+@torch.inference_mode()
+def test_cpu_factory_preserves_full_decode(
+    vocoder: Ming3StreamingVocoder, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The fixed-slot streaming backend must not remove CPU full-decoder fallback."""
+    monkeypatch.setattr(factory_module, "resolve_checkpoint", lambda model: ".")
+    monkeypatch.setattr(
+        factory_module,
+        "load_checkpoint_config",
+        lambda checkpoint: {"model_type": "dense"},
+    )
+    vocoder.vae.bfloat16()
+    monkeypatch.setattr(
+        factory_module, "load_audio_vae", lambda *args, **kwargs: (vocoder.vae, 44100)
+    )
+    scheduler = factory_module.create_vocoder_executor(
+        "model", graph_latent_steps=8, device="cpu"
+    )
+    payload = StagePayload(
+        "cpu",
+        OmniRequest("text", params={"stream": False}),
+        {"latents": torch.ones(5, 1, 4), "usage": {}, "finish_reason": "stop"},
+    )
+    result = scheduler.fn(payload)
+    assert result.data["finish_reason"] == "stop"
+    assert result.data["audio_waveform"]
