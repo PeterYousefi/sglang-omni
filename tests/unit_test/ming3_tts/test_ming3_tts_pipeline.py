@@ -204,6 +204,7 @@ def test_preprocessing_cache_bypasses_unseeded_prompts_and_urls(
     )
     monkeypatch.setattr(stages, "get_tokenizer", lambda *arguments, **keywords: None)
     monkeypatch.setattr(stages, "validate_dense_tokenizer", lambda tokenizer: None)
+
     def load_audio_vae(checkpoint, resolved_device, *, component):
         assert resolved_device == torch.device("cpu")
         return None, 44100
