@@ -116,6 +116,7 @@ def create_vocoder_executor(
     model_path: str,
     *,
     graph_latent_steps: int = 0,
+    stream_chunk_steps: int = 8,
     device: str | None = None,
     gpu_id: int | None = None,
 ) -> Ming3StreamingVocoder:
