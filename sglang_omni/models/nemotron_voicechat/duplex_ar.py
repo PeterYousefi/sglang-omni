@@ -131,6 +131,8 @@ class UnitDecodeMixin:
 
 
 class DuplexThinkerRunner(UnitDecodeMixin, NemotronVoiceChatModelRunner):
+    before_decode = UnitDecodeMixin.before_decode
+
     def before_prefill(
         self,
         forward_batch: ForwardBatch,
@@ -141,6 +143,8 @@ class DuplexThinkerRunner(UnitDecodeMixin, NemotronVoiceChatModelRunner):
 
 
 class DuplexTalkerRunner(UnitDecodeMixin, NemotronVoiceChatTalkerModelRunner):
+    before_decode = UnitDecodeMixin.before_decode
+
     def __init__(
         self, tp_worker: ModelWorker, output_processor: SGLangOutputProcessor
     ) -> None:
