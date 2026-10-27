@@ -10,7 +10,7 @@ The 0.5B checkpoint uses a dense Qwen2.5-0.5B backbone. Leaving out `ref_audio` 
 
 Install SGLang-Omni by following [Installation](../get_started/installation.md).
 
-Startup uses one GPU. Preprocessing runs on the CPU. The backbone and the VAE decoder share that GPU. The two checkpoints differ only by the model path.
+Startup uses one GPU shared by the backbone and the VAE decoder. Preprocessing placement and concurrency depend on the checkpoint; see [Deployment defaults](#deployment-defaults).
 
 ```bash
 sgl-omni serve --model-path inclusionAI/Ming-3.0-tts-tiny
@@ -20,7 +20,7 @@ sgl-omni serve --model-path inclusionAI/Ming-3.0-tts-tiny
 sgl-omni serve --model-path inclusionAI/Ming-3.0-tts-0.5B
 ```
 
-The speech endpoint is `POST /v1/audio/speech`. With `stream=false`, the response is one complete waveform. On CUDA deployments, `stream=true` makes both Tiny and 0.5B return incremental PCM audio as it becomes available; short utterances may only produce audio when synthesis finishes. Streaming uses request-local incremental AudioVAE cache slots, and ready requests share a batched decoder step. The default decoder group is 8 latents; this is an audio chunk size, not a wall-clock first-packet guarantee. Non-streaming requests retain full-sequence decoding, including CUDA graphs when configured. The requests below are the same for both servers. Set `model` to the checkpoint id used at startup. The examples use `inclusionAI/Ming-3.0-tts-tiny`.
+The speech endpoint is `POST /v1/audio/speech`. With `stream=false`, the response is one complete waveform. On CUDA deployments, `stream=true` makes both Tiny and 0.5B return incremental PCM audio as it becomes available; short utterances may only produce audio when synthesis finishes. Streaming uses request-local incremental AudioVAE cache slots, and ready requests share a batched decoder step. The default decoder group is 8 latents. During normal generation, buffering and lookahead delay the first non-empty chunk until latent 17; earlier completion flushes the remaining audio. This is a decoder grouping and buffering rule, not a wall-clock first-packet guarantee. Non-streaming requests retain full-sequence decoding, including CUDA graphs when configured. The requests below are the same for both servers. Set `model` to the checkpoint id used at startup. The examples use `inclusionAI/Ming-3.0-tts-tiny`.
 
 ## Zero-shot speech
 
