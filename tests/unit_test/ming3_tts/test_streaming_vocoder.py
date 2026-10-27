@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+from unittest.mock import patch
+
 import numpy as np
 import pytest
 import torch
@@ -57,11 +59,11 @@ def vocoder() -> Ming3StreamingVocoder:
         return payload
 
     return Ming3StreamingVocoder(
-        decode, vae=vae, sample_rate=44100, stream_chunk_steps=8
+        decode, vae=vae, sample_rate=44100, stream_chunk_steps=8, stream_capacity=2
     )
 
 
-@pytest.mark.parametrize("latent_steps", [1, 8, 9, 16, 17, 39, 66])
+@pytest.mark.parametrize("latent_steps", [1, 5, 8, 9, 16, 17, 39, 66])
 @torch.inference_mode()
 def test_incremental_audio_matches_full_decode_and_flushes_tail(
     vocoder: Ming3StreamingVocoder, latent_steps: int
@@ -78,23 +80,31 @@ def test_incremental_audio_matches_full_decode_and_flushes_tail(
     )
     messages = []
     for chunk_id, latent in enumerate(latents):
-        messages.extend(
-            vocoder.on_stream_chunk(
-                "speech",
-                StreamItem(
-                    chunk_id,
-                    latent,
-                    "tts_engine",
-                    {"modality": "audio_latents", "stream": True},
-                ),
-            )
+        vocoder.on_stream_chunk_batch(
+            [
+                (
+                    "speech",
+                    StreamItem(
+                        chunk_id,
+                        latent,
+                        "tts_engine",
+                        {
+                            "modality": "audio_latents",
+                            "stream": True,
+                            "is_last": chunk_id == latent_steps - 1,
+                        },
+                    ),
+                )
+            ]
         )
     if latent_steps > 16:
-        assert messages
+        assert list(vocoder.outbox.queue)
     else:
         pass
     vocoder.stream_payloads["speech"] = payload
-    messages.extend(vocoder.on_stream_done("speech"))
+    terminal_messages = vocoder.on_stream_done("speech")
+    messages.extend(list(vocoder.outbox.queue))
+    messages.extend(terminal_messages)
     actual = torch.from_numpy(
         np.concatenate(
             [
@@ -117,27 +127,57 @@ def test_abort_discards_cache_and_rejects_late_latents(
 ) -> None:
     """An aborted request cannot retain its decoder cache or create it from late chunks."""
     for chunk_id in range(17):
-        vocoder.on_stream_chunk(
-            "aborted",
-            StreamItem(chunk_id, torch.ones(1, 4), "tts_engine", {"stream": True}),
+        vocoder.on_stream_chunk_batch(
+            [
+                (
+                    "aborted",
+                    StreamItem(
+                        chunk_id,
+                        torch.ones(1, 4),
+                        "tts_engine",
+                        {"stream": True, "is_last": False},
+                    ),
+                )
+            ]
         )
-    state = vocoder.stream_states["aborted"]
-    assert state.past_key_values is not None
+    assert vocoder.slot_bindings.slot_for("aborted") is not None
     vocoder.abort("aborted")
     assert "aborted" not in vocoder.stream_states
-    assert (
-        vocoder.on_stream_chunk(
-            "aborted", StreamItem(17, torch.ones(1, 4), "tts_engine", {"stream": True})
-        )
-        == []
+    vocoder.on_stream_chunk_batch(
+        [
+            (
+                "aborted",
+                StreamItem(
+                    17,
+                    torch.ones(1, 4),
+                    "tts_engine",
+                    {"stream": True, "is_last": False},
+                ),
+            )
+        ]
     )
+    assert "aborted" not in vocoder.stream_states
+    vocoder.drain_pending_releases()
+    assert vocoder.slot_bindings.slot_for("aborted") is None
 
 
 def test_reordered_chunks_fail_before_decoding(vocoder: Ming3StreamingVocoder) -> None:
-    with pytest.raises(ValueError, match="Out-of-order"):
-        vocoder.on_stream_chunk(
-            "speech", StreamItem(1, torch.zeros(1, 4), "tts_engine", {"stream": True})
-        )
+    vocoder.on_stream_chunk_batch(
+        [
+            (
+                "speech",
+                StreamItem(
+                    1,
+                    torch.zeros(1, 4),
+                    "tts_engine",
+                    {"stream": True, "is_last": False},
+                ),
+            )
+        ]
+    )
+    messages = list(vocoder.outbox.queue)
+    assert any(message.type == "error" for message in messages)
+    assert "speech" not in vocoder.stream_states
 
 
 @torch.inference_mode()
@@ -153,7 +193,12 @@ def test_interleaved_streams_finish_after_late_payload_and_release_state(
         for request_id, latents in sequences.items():
             vocoder.handle_stream_chunk(
                 request_id,
-                StreamItem(chunk_id, latents[chunk_id], "tts_engine", {"stream": True}),
+                StreamItem(
+                    chunk_id,
+                    latents[chunk_id],
+                    "tts_engine",
+                    {"stream": True, "is_last": chunk_id == 32},
+                ),
             )
     for request_id in sequences:
         vocoder.handle_stream_done(request_id)
@@ -191,3 +236,55 @@ def test_interleaved_streams_finish_after_late_payload_and_release_state(
             )
             == 1
         )
+
+
+@torch.inference_mode()
+def test_ready_streams_share_one_decoder_step(vocoder: Ming3StreamingVocoder) -> None:
+    """Ready requests must use one decoder call with isolated cache rows."""
+    for chunk_id in range(8):
+        vocoder.on_stream_chunk_batch(
+            [
+                (
+                    request_id,
+                    StreamItem(
+                        chunk_id,
+                        torch.ones(1, 4) * value,
+                        "tts_engine",
+                        {"stream": True},
+                    ),
+                )
+                for request_id, value in [("one", 1), ("two", 2)]
+            ]
+        )
+    with patch.object(
+        vocoder.decoder, "run_streaming", wraps=vocoder.decoder.run_streaming
+    ) as decode:
+        vocoder.on_stream_chunk_batch(
+            [
+                (
+                    request_id,
+                    StreamItem(
+                        8, torch.ones(1, 4) * value, "tts_engine", {"stream": True}
+                    ),
+                )
+                for request_id, value in [("one", 1), ("two", 2)]
+            ]
+        )
+    assert decode.call_count == 1
+    assert len(decode.call_args.kwargs["slot_ids"]) == 2
+    assert len(set(decode.call_args.kwargs["slot_ids"])) == 2
+
+
+@torch.inference_mode()
+def test_first_packet_waits_for_lookahead(vocoder: Ming3StreamingVocoder) -> None:
+    """The eight-latent default emits its first non-empty packet at latent seventeen."""
+    for chunk_id in range(16):
+        vocoder.handle_stream_chunk(
+            "speech",
+            StreamItem(chunk_id, torch.ones(1, 4), "tts_engine", {"stream": True}),
+        )
+    assert vocoder.outbox.empty()
+    vocoder.handle_stream_chunk(
+        "speech", StreamItem(16, torch.ones(1, 4), "tts_engine", {"stream": True})
+    )
+    assert any(message.type == "stream" for message in vocoder.outbox.queue)

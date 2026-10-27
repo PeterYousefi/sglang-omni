@@ -1,47 +1,22 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Request-local incremental AudioVAE decoding for Ming 3 TTS."""
+"""Ming 3 payload adapter for shared batched AudioVAE streaming."""
 
-from __future__ import annotations
-
-from dataclasses import dataclass, field
-from typing import Protocol, TypedDict
+from dataclasses import replace
 
 import torch
-from transformers.cache_utils import Cache
 
+from sglang_omni.modules.ming_audio.audio_decode import MingAudioDecoder
+from sglang_omni.modules.ming_audio.streaming_vocoder import (
+    AudioVAEStreamingVocoder,
+    FullDecode,
+    StreamState,
+)
 from sglang_omni.modules.ming_audio.vae.modeling_audio_vae import AudioVAE
 from sglang_omni.pipeline.stage.stream_queue import StreamItem
 from sglang_omni.proto.request import StagePayload
-from sglang_omni.scheduling.streaming_vocoder import StreamingVocoderBase
 
 
-class FullDecode(Protocol):
-    def __call__(self, payload: StagePayload) -> StagePayload:
-        pass
-
-
-class UpsampleState(TypedDict):
-    prev_chunk: torch.Tensor | None
-    history_last: torch.Tensor | None
-    is_first: bool
-
-
-@dataclass(kw_only=True)
-class Ming3StreamState:
-    pending_latents: list[torch.Tensor] = field(default_factory=list)
-    past_key_values: Cache | None = None
-    codec_state: tuple[
-        UpsampleState | None, torch.Tensor | None, torch.Tensor | None
-    ] = (
-        None,
-        None,
-        None,
-    )
-    expected_chunk_id: int = 0
-    emitted_samples: int = 0
-
-
-class Ming3StreamingVocoder(StreamingVocoderBase[Ming3StreamState, None]):
+class Ming3StreamingVocoder(AudioVAEStreamingVocoder):
     def __init__(
         self,
         compute: FullDecode,
@@ -49,91 +24,72 @@ class Ming3StreamingVocoder(StreamingVocoderBase[Ming3StreamState, None]):
         vae: AudioVAE,
         sample_rate: int,
         stream_chunk_steps: int,
+        stream_capacity: int = 32,
+        streaming_cuda_graph: bool = False,
     ) -> None:
         if stream_chunk_steps < 1:
             raise ValueError("stream_chunk_steps must be positive")
         else:
             pass
         self.vae = vae
-        self.stream_chunk_steps = stream_chunk_steps
-        super().__init__(
-            compute,
-            sample_rate=sample_rate,
-            stream_source_hint="Ming-3.0-TTS",
-            stream_input_modality="audio_latents",
+        decoder = MingAudioDecoder(
+            vae,
+            stream_capacity=stream_capacity,
+            max_stream_step_latents=stream_chunk_steps,
+            streaming_cuda_graph_required=streaming_cuda_graph,
         )
-
-    def create_stream_state(self, request_id: str) -> Ming3StreamState:
-        return Ming3StreamState()
+        super().__init__(
+            decoder,
+            patch_size=1,
+            latent_dim=vae.decoder.latent_dim,
+            initial_chunk_patches=stream_chunk_steps,
+            steady_chunk_patches=stream_chunk_steps,
+            compute=compute,
+            source_hint="Ming-3.0-TTS",
+        )
 
     def ingest_stream_item(
-        self, request_id: str, chunk: StreamItem
-    ) -> Ming3StreamState | None:
-        state = self.get_or_create_stream_state(request_id)
-        if state is None:
-            return None
-        elif chunk.chunk_id != state.expected_chunk_id:
-            raise ValueError(f"Out-of-order Ming 3 latent chunk for {request_id}")
+        self, request_id: str, item: StreamItem
+    ) -> StreamState | None:
+        # note (Zhuofeng Li): Ming 3 sends terminal state through stream_done after sampling the final latent.
+        item = replace(item, metadata={**(item.metadata or {}), "is_last": False})
+        return super().ingest_stream_item(request_id, item)
+
+    def has_executable_work(self, state: StreamState) -> bool:
+        if state.terminal_received:
+            return super().has_executable_work(state)
         else:
-            super().ingest_stream_item(request_id, chunk)
-            state.expected_chunk_id += 1
-            return state
+            # note (Zhuofeng Li): Retain one latent for the terminal interpolation and ISTFT transition.
+            return len(state.pending_patches) > self.next_chunk_patches(state)
 
-    def validate_chunk(
-        self, request_id: str, state: Ming3StreamState, latents: torch.Tensor
-    ) -> torch.Tensor:
-        expected_shape = (1, self.vae.decoder.latent_dim)
-        if (
-            tuple(latents.shape) != expected_shape
-            or latents.dtype != torch.float32
-            or latents.device.type != "cpu"
-        ):
-            raise ValueError(
-                f"Ming 3 latent chunks must be CPU float32 with shape {expected_shape}"
-            )
-        else:
-            return latents
-
-    def ingest(
-        self, request_id: str, state: Ming3StreamState, latents: torch.Tensor
-    ) -> None:
-        state.pending_latents.append(latents)
-
-    @torch.inference_mode()
     def decode_delta(
-        self, request_id: str, state: Ming3StreamState, *, is_final: bool
+        self, request_id: str, state: StreamState, *, is_final: bool
     ) -> torch.Tensor | None:
-        # note (Zhuofeng Li): Keep a final latent to flush interpolation and ISTFT overlap without an empty decoder call.
-        if not is_final and len(state.pending_latents) <= self.stream_chunk_steps:
+        if not is_final:
             return None
-        elif not state.pending_latents:
-            raise RuntimeError(f"Ming 3 stream {request_id} ended without latents")
+        else:
+            state.terminal_received = True
+        if self.slot_bindings.try_bind(request_id) is None:
+            return None
         else:
             pass
-        step_count = len(state.pending_latents) if is_final else self.stream_chunk_steps
-        parameter = next(self.vae.parameters())
-        latents = torch.cat(state.pending_latents[:step_count], dim=0).to(
-            device=parameter.device, dtype=parameter.dtype
-        )
-        waveform, codec_state, past_key_values = self.vae.decode(
-            latents.unsqueeze(0),
-            past_key_values=state.past_key_values,
-            use_cache=True,
-            stream_state=state.codec_state,
-            last_chunk=is_final,
-        )
-        state.pending_latents[:step_count] = []
-        state.codec_state = codec_state
-        state.past_key_values = past_key_values
-        waveform = waveform.detach().float().cpu().reshape(-1).clone()
-        state.emitted_samples += waveform.numel()
-        if waveform.numel() == 0:
-            return None
-        else:
-            return waveform
+        waveforms = []
+        while not state.terminal_committed:
+            if not state.pending_patches:
+                raise RuntimeError(f"Ming 3 stream {request_id} ended without latents")
+            else:
+                pass
+            participants = [(request_id, state)]
+            decoded = self.run_step(participants, self.build_step_plan(participants))
+            waveform = decoded.get(request_id)
+            if waveform is not None:
+                waveforms.append(waveform)
+            else:
+                pass
+        return torch.cat(waveforms) if waveforms else None
 
     def final_result_data(
-        self, request_id: str, payload: StagePayload, state: Ming3StreamState
+        self, request_id: str, payload: StagePayload, state: StreamState
     ) -> dict[str, int | float | str | dict[str, int] | None]:
         if state.emitted_samples == 0:
             raise RuntimeError(f"Ming 3 stream {request_id} completed without audio")

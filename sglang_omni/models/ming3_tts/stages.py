@@ -404,10 +404,6 @@ def create_tts_engine_executor(
 
     def build_request(payload: StagePayload) -> Ming3TTSRequestData:
         parameters = payload.request.params
-        if dense and parameters.get("stream", False):
-            raise ValueError("Ming 3 0.5B streaming is not supported yet")
-        else:
-            pass
         seed = parameters.get("seed")
         if dense:
             prompt = materialize_dense_prompt(
@@ -534,6 +530,7 @@ def create_vocoder_executor(
         latents = payload.data["latents"].to(resolved_device, dtype=torch.bfloat16)
         waveform, _, _ = vae.decode(latents.reshape(1, -1, latents.shape[-1]))
         usage = payload.data["usage"]
+        finish_reason = payload.data["finish_reason"]
         payload.data = audio_waveform_payload(
             waveform.float().cpu(),
             sample_rate=sample_rate,
@@ -541,6 +538,7 @@ def create_vocoder_executor(
             source_hint="Ming-3.0-TTS",
         )
         payload.data["usage"] = usage
+        payload.data["finish_reason"] = finish_reason
         return payload
 
     return Ming3StreamingVocoder(
