@@ -49,6 +49,9 @@ Supported Models
    * - `inclusionAI/Ming-3.0-tts-tiny <https://huggingface.co/inclusionAI/Ming-3.0-tts-tiny>`_
      - TTS
      - 44.1 kHz voice cloning from one reference recording
+   * - `inclusionAI/Ming-3.0-tts-0.5B <https://huggingface.co/inclusionAI/Ming-3.0-tts-0.5B>`_
+     - TTS
+     - Dense 0.5B backbone, 44.1 kHz voice cloning from one reference recording
    * - `dots-studio/dots.tts-mf <https://huggingface.co/dots-studio/dots.tts-mf>`_
      - TTS
      - 48 kHz continuous-latent TTS; also ``dots.tts-soar`` / ``dots.tts-base``
@@ -104,6 +107,7 @@ Supported Models
    :caption: Get Started
 
    get_started/installation.md
+   get_started/installation_apple_silicon.md
    get_started/installation_npu.md
    get_started/installation_xpu.md
    get_started/installation_cpu.md
@@ -115,36 +119,37 @@ Supported Models
    :maxdepth: 1
    :caption: Cookbook
 
-   cookbook/higgs_tts.md
-   cookbook/nemotron_diarization.md
-   cookbook/voxtral_tts.md
-   cookbook/fishaudio_s2_pro.md
-   cookbook/fishaudio_drama3.md
    cookbook/qwen3_tts.md
-   cookbook/ming_tts.md
    cookbook/moss_tts.md
-   cookbook/moss_tts_local.md
-   cookbook/dots_tts.md
-   cookbook/minimax_music3.md
-   cookbook/zonos2.md
-   cookbook/qwen3_asr.md
-   cookbook/fun_asr.md
-   cookbook/arkasr.md
+   cookbook/whisper_asr.md
    cookbook/nemotron3_5_asr.md
    cookbook/moss_transcribe_diarize.md
-   cookbook/whisper_asr.md
-   cookbook/qwen3_omni.md
-   cookbook/minicpm_o.md
-   cookbook/ming_omni.md
-   cookbook/ming3_audio.md
-   cookbook/ming3_tts.md
-   cookbook/ming3_asr.md
+   cookbook/fishaudio_s2_pro.md
+   cookbook/fun_cosyvoice3.md
    cookbook/nemotron_voicechat.md
    cookbook/personaplex.md
-   cookbook/llada2_uni.md
-   cookbook/fun_cosyvoice3.md
-   cookbook/auk.md
    cookbook/cosmos3_nano.md
+   cookbook/qwen3_omni.md
+   cookbook/qwen3_asr.md
+   cookbook/minicpm_o.md
+   cookbook/fun_asr.md
+   cookbook/higgs_tts.md
+   cookbook/moss_tts_local.md
+   cookbook/nemotron_diarization.md
+   cookbook/fishaudio_drama3.md
+   cookbook/minimax_music3.md
+   cookbook/ming_omni.md
+   cookbook/auk.md
+   cookbook/zonos2.md
+   cookbook/arkasr.md
+   cookbook/hy_simulmt.md
+   cookbook/voxtral_tts.md
+   cookbook/dots_tts.md
+   cookbook/llada2_uni.md
+   cookbook/ming_tts.md
+   cookbook/ming3_asr.md
+   cookbook/ming3_audio.md
+   cookbook/ming3_tts.md
 
 .. toctree::
    :maxdepth: 1
@@ -164,6 +169,13 @@ Supported Models
 
 .. toctree::
    :maxdepth: 1
+   :caption: MLX
+
+   mlx/index.md
+
+
+.. toctree::
+   :maxdepth: 1
    :caption: Developer Reference
 
    developer_reference/main.md
@@ -175,12 +187,11 @@ Supported Models
    developer_reference/reference_encode_service.md
    developer_reference/profiler.md
    developer_reference/qwen3_asr_concurrency_profile.md
-   developer_reference/full_duplex_bench.md
-   developer_reference/full_duplex_metrics.md
+   developer_reference/full_duplex_guide.md
    developer_reference/tts_bench.md
+   developer_reference/tts_model_integration.md
    developer_reference/asr_bench.md
    developer_reference/omni_offline_bench.md
    developer_reference/rl_admin_control.md
-   developer_reference/mlx.md
    developer_reference/ci_labels.md
    developer_reference/bump_version.md
