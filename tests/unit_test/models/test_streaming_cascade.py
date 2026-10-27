@@ -36,7 +36,7 @@ from sglang_omni.models.streaming_cascade.config import (
     ComponentGraphConfig,
     StreamingCascadePipelineConfig,
 )
-from sglang_omni.models.streaming_cascade.dialog import CUT_REPLY_NOTE, heard_prefix
+from sglang_omni.models.streaming_cascade.dialog import heard_prefix
 from sglang_omni.models.streaming_cascade.generators import ChatDelta
 from sglang_omni.models.streaming_cascade.numerals import spoken_text
 from sglang_omni.models.streaming_cascade.recognizers import probe_realtime_service
@@ -300,13 +300,13 @@ async def test_a_truncate_after_speech_over_a_reply_keeps_the_heard_sentences_an
     assert [control_type(o) for o in outputs][3:5] == [INTERRUPT, TURN_INTERRUPTED]
     assert dialog.messages[2].content == "One two.\nThree four."
     assert dialog.messages[2].uncertain
-    prompt = [o for o in outputs if o.format == MESSAGES][-1]
-    assert prompt.payload["messages"][0]["content"].endswith(CUT_REPLY_NOTE)
-    assert prompt.payload["messages"][2] == {
-        "role": "assistant",
-        "content": "One two.\nThree four.…",
-    }
-    assert messages_of(prompt)[-1].content == "what did you say"
+    assert prompts(outputs)[-1] == [
+        ("system", dialog.config.system_prompt),
+        (
+            "user",
+            'question (You started to answer "One two.\nThree four." and I interrupted you.) what did you say',
+        ),
+    ]
 
 
 @pytest.mark.asyncio
@@ -553,10 +553,11 @@ async def test_a_partly_heard_reply_keeps_its_heard_prefix_between_the_questions
     )
     outputs = await drain(dialog, inputs)
     assert prompts(outputs)[-1] == [
-        ("system", f"{dialog.config.system_prompt} {CUT_REPLY_NOTE}"),
-        ("user", "question"),
-        ("assistant", "One two.\nThree four.…"),
-        ("user", "wait, what?"),
+        ("system", dialog.config.system_prompt),
+        (
+            "user",
+            'question (You started to answer "One two.\nThree four." and I interrupted you.) wait, what?',
+        ),
     ]
 
 
@@ -608,12 +609,13 @@ async def test_utterances_over_unheard_replies_in_a_row_join_one_user_message():
             ("user", "second third fourth"),
         ],
         [
-            ("system", f"{dialog.config.system_prompt} {CUT_REPLY_NOTE}"),
+            system,
             ("user", "first"),
             ("assistant", "Reply one."),
-            ("user", "second third fourth"),
-            ("assistant", "Reply four.…"),
-            ("user", "fifth"),
+            (
+                "user",
+                'second third fourth (You started to answer "Reply four." and I interrupted you.) fifth',
+            ),
         ],
     ]
 
@@ -703,10 +705,11 @@ async def test_a_reply_interrupted_after_all_its_text_was_heard_is_still_marked_
     )
     assert dialog.messages[2].is_cut
     assert prompts(outputs)[-1] == [
-        ("system", f"{dialog.config.system_prompt} {CUT_REPLY_NOTE}"),
-        ("user", "question"),
-        ("assistant", "One two.…"),
-        ("user", "wait, what?"),
+        ("system", dialog.config.system_prompt),
+        (
+            "user",
+            'question (You started to answer "One two." and I interrupted you.) wait, what?',
+        ),
     ]
 
 
@@ -750,31 +753,29 @@ async def test_a_reply_that_finished_stays_whole_without_a_truncate():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "resumed, note, history",
+    "resumed, history",
     [
         (
             "before_the_reply_opens",
-            "",
             [("user", "Ten companies. That let you teach English online.")],
         ),
         (
             "before_its_audio",
-            "",
             [("user", "Ten companies. That let you teach English online.")],
         ),
         (
             "after_its_first_sentence",
-            f" {CUT_REPLY_NOTE}",
             [
-                ("user", "Ten companies."),
-                ("assistant", "One two.…"),
-                ("user", "That let you teach English online."),
+                (
+                    "user",
+                    'Ten companies. (You started to answer "One two." and I interrupted you.) That let you teach English online.',
+                ),
             ],
         ),
     ],
 )
 async def test_speech_that_resumes_after_the_utterance_ended_interrupts_its_reply(
-    resumed, note, history
+    resumed, history
 ):
     dialog = build({"kind": "dialog"})
     question = transcript_chunk("Ten companies.", True)
@@ -815,7 +816,7 @@ async def test_speech_that_resumes_after_the_utterance_ended_interrupts_its_repl
         None,
     ]
     assert [(m.role, m.content) for m in messages_of(outputs[-1])] == [
-        ("system", dialog.config.system_prompt + note),
+        ("system", dialog.config.system_prompt),
         *history,
     ]
 
