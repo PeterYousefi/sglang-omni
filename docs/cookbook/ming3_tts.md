@@ -20,7 +20,7 @@ sgl-omni serve --model-path inclusionAI/Ming-3.0-tts-tiny
 sgl-omni serve --model-path inclusionAI/Ming-3.0-tts-0.5B
 ```
 
-The speech endpoint is `POST /v1/audio/speech`. The body is one complete waveform. `stream=true` still waits until that waveform is finished, then returns it as a single PCM body. The requests below are the same for both servers. Set `model` to the checkpoint id used at startup. The examples use `inclusionAI/Ming-3.0-tts-tiny`.
+The speech endpoint is `POST /v1/audio/speech`. With `stream=false`, the response is one complete waveform. With `stream=true`, both Tiny and 0.5B return incremental PCM audio as it becomes available; short utterances may only produce audio when synthesis finishes. Streaming uses request-local incremental AudioVAE cache slots, and ready requests share a batched decoder step. The default decoder group is 8 latents; this is an audio chunk size, not a wall-clock first-packet guarantee. Non-streaming requests retain full-sequence decoding, including CUDA graphs when configured. The requests below are the same for both servers. Set `model` to the checkpoint id used at startup. The examples use `inclusionAI/Ming-3.0-tts-tiny`.
 
 ## Zero-shot speech
 
