@@ -65,8 +65,7 @@ class OfflineResultAdapter(Protocol):
 class DuplexSessionBuilderMixin:
     adapter: ARSessionAdapter
     scheduler_class = OmniScheduler
-    # note (Junnan Li): unlike offline, the thinker captures too: an eager
-    # thinker unit leaves no room in the 80 ms frame for a second session.
+    # note (Junnan Li): an eager thinker unit leaves no room in the 80 ms frame for a second session.
     disable_cuda_graph = False
 
     def generation_defaults(self, *, dtype: str) -> dict[str, str | int | bool]:

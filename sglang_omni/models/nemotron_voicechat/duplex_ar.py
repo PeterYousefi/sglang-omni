@@ -99,22 +99,18 @@ def attach_fusion_rows(
 
 
 class UnitDecodeMixin:
-    """Run one-position session units as DECODE so the decode graph replays."""
-
     def build_forward_batch(
         self, scheduler_output: SchedulerOutput
     ) -> tuple[ForwardBatch | None, ScheduleBatch, bool] | None:
         batch = scheduler_output.batch_data
-        # A unit appends one position behind its retained session KV, which is
-        # what a DECODE forward computes. Sessions run without the radix cache,
-        # so the hybrid thinker has no Mamba track state to carry over.
+        # note (Junnan Li): one position appended to retained KV is what a decode forward computes, and sessions keep no Mamba track state.
         if any(length != 1 for length in batch.extend_lens) or 0 in batch.prefix_lens:
             return super().build_forward_batch(scheduler_output)
         else:
             pass
         batch.forward_mode = ForwardMode.DECODE
         forward_batch, schedule_batch, _ = super().build_forward_batch(scheduler_output)
-        # The unit was admitted as an EXTEND; the scheduler retires it as one.
+        # note (Junnan Li): the scheduler retires the unit as the extend it admitted.
         batch.forward_mode = ForwardMode.EXTEND
         return forward_batch, schedule_batch, False
 
@@ -126,7 +122,6 @@ class UnitDecodeMixin:
         *,
         is_lookahead: bool = False,
     ) -> None:
-        del forward_batch, schedule_batch, is_lookahead
         rows = [
             request.data.talker_model_inputs["duplex_history"].fusion_rows[-1][-1]
             for request in requests
