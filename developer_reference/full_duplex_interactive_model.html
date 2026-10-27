@@ -545,6 +545,7 @@
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#session-settings">Session settings</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#node-reference">Node Reference</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#realtime-transcription"><code class="docutils literal notranslate"><span class="pre">realtime_transcription</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#streaming-transcription"><code class="docutils literal notranslate"><span class="pre">streaming_transcription</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#openai-transcription"><code class="docutils literal notranslate"><span class="pre">openai_transcription</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#running-transcript"><code class="docutils literal notranslate"><span class="pre">running_transcript</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#dialog"><code class="docutils literal notranslate"><span class="pre">dialog</span></code></a></li>
@@ -1054,7 +1055,15 @@ hf<span class="w"> </span>download<span class="w"> </span>pipecat-ai/smart-turn-
 <td><p><code class="docutils literal notranslate"><span class="pre">vad</span></code>, <code class="docutils literal notranslate"><span class="pre">asr</span></code>, <code class="docutils literal notranslate"><span class="pre">dialog</span></code>, <code class="docutils literal notranslate"><span class="pre">llm</span></code>, <code class="docutils literal notranslate"><span class="pre">tts</span></code>, <code class="docutils literal notranslate"><span class="pre">aligner</span></code> (forced, recognizing the sentence at the cut, published)</p></td>
 <td><p>Alignment worker on 8010</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">qwen3-asr-qwen3-tts-base-clone</span></code></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">qwen3-asr-streaming-qwen3-tts-vivian</span></code></p></td>
+<td><p>Qwen3-ASR-1.7B service on 8002 started with <code class="docutils literal notranslate"><span class="pre">--enable-realtime</span></code> (<code class="docutils literal notranslate"><span class="pre">streaming_transcription</span></code>, a partial transcript every 1000 ms of speech)</p></td>
+<td><p>Qwen3.8-27B on 8000, thinking off</p></td>
+<td><p>Qwen3-TTS-12Hz-1.7B-Base on 8005, cloning <code class="docutils literal notranslate"><span class="pre">voices/vivian.wav</span></code></p></td>
+<td><p>2: the language model on GPU 0, both speech models on GPU 1</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">vad</span></code>, <code class="docutils literal notranslate"><span class="pre">asr</span></code>, <code class="docutils literal notranslate"><span class="pre">dialog</span></code>, <code class="docutils literal notranslate"><span class="pre">llm</span></code>, <code class="docutils literal notranslate"><span class="pre">tts</span></code>, <code class="docutils literal notranslate"><span class="pre">aligner</span></code> (forced, recognizing the sentence at the cut, published)</p></td>
+<td><p>Alignment worker on 8010</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">qwen3-asr-qwen3-tts-base-clone</span></code></p></td>
 <td><p>Qwen3-ASR-1.7B service on 8002</p></td>
 <td><p>Qwen3-4B-Instruct-2507 on 8000</p></td>
 <td><p>Qwen3-TTS-12Hz-1.7B-Base on 8005, cloning <code class="docutils literal notranslate"><span class="pre">reference_zh.wav</span></code> in the profile directory</p></td>
@@ -1062,7 +1071,7 @@ hf<span class="w"> </span>download<span class="w"> </span>pipecat-ai/smart-turn-
 <td><p><code class="docutils literal notranslate"><span class="pre">vad</span></code>, <code class="docutils literal notranslate"><span class="pre">turn_detection</span></code> (published), <code class="docutils literal notranslate"><span class="pre">asr</span></code>, <code class="docutils literal notranslate"><span class="pre">dialog</span></code>, <code class="docutils literal notranslate"><span class="pre">llm</span></code>, <code class="docutils literal notranslate"><span class="pre">tts</span></code>, <code class="docutils literal notranslate"><span class="pre">aligner</span></code> (forced, recognizing the sentence at the cut, published)</p></td>
 <td><p>Alignment worker on 8010</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">nemotron-qwen3-tts</span></code></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">nemotron-qwen3-tts</span></code></p></td>
 <td><p>Nemotron 3.5 streaming ASR service on 8001 (<code class="docutils literal notranslate"><span class="pre">realtime_transcription</span></code>)</p></td>
 <td><p>Qwen3-4B-Instruct-2507 on 8000</p></td>
 <td><p>Qwen3-TTS-12Hz-0.6B-Base on 8004, cloning <code class="docutils literal notranslate"><span class="pre">reference.wav</span></code></p></td>
@@ -1070,7 +1079,7 @@ hf<span class="w"> </span>download<span class="w"> </span>pipecat-ai/smart-turn-
 <td><p><code class="docutils literal notranslate"><span class="pre">vad</span></code>, <code class="docutils literal notranslate"><span class="pre">asr</span></code>, <code class="docutils literal notranslate"><span class="pre">dialog</span></code>, <code class="docutils literal notranslate"><span class="pre">llm</span></code>, <code class="docutils literal notranslate"><span class="pre">tts</span></code>, <code class="docutils literal notranslate"><span class="pre">aligner</span></code> (forced)</p></td>
 <td><p>Alignment worker on 8010; a recording at <code class="docutils literal notranslate"><span class="pre">reference.wav</span></code>, with <code class="docutils literal notranslate"><span class="pre">reference_text</span></code> set to its transcript</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">nemotron-stage-qwen3-tts</span></code></p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">nemotron-stage-qwen3-tts</span></code></p></td>
 <td><p>Nemotron 3.5 ASR as the <code class="docutils literal notranslate"><span class="pre">asr</span></code> stage on GPU 0, with <code class="docutils literal notranslate"><span class="pre">running_transcript</span></code></p></td>
 <td><p>Qwen3-4B-Instruct-2507 on 8000</p></td>
 <td><p>Qwen3-TTS-12Hz-0.6B-Base on 8004, cloning <code class="docutils literal notranslate"><span class="pre">reference.wav</span></code></p></td>
@@ -1401,6 +1410,52 @@ hf<span class="w"> </span>download<span class="w"> </span>pipecat-ai/smart-turn-
 <td><p>string</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">OPENAI_API_KEY</span></code></p></td>
 <td><p>Environment variable whose value is sent as a bearer token; nothing is sent when it is unset.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">timeout_s</span></code></p></td>
+<td><p>number &gt; 0</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">120</span></code></p></td>
+<td><p>The limit for connecting and for one utterance’s whole exchange.</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+<section id="streaming-transcription">
+<h3><code class="docutils literal notranslate"><span class="pre">streaming_transcription</span></code><a class="headerlink" href="#streaming-transcription" title="Link to this heading">#</a></h3>
+<p>Streams each utterance over its own WebSocket to <code class="docutils literal notranslate"><span class="pre">&lt;base_url&gt;/v1/realtime?intent=transcription&amp;model=&lt;model&gt;</span></code> of an SGLang-Omni ASR server that declares realtime transcription, such as Qwen3-ASR started with <code class="docutils literal notranslate"><span class="pre">--enable-realtime</span></code>. The node cuts the utterances, so each session runs without server VAD: the node sends the utterance’s audio, then <code class="docutils literal notranslate"><span class="pre">transcription.done</span></code>. Every <code class="docutils literal notranslate"><span class="pre">transcription.segment</span></code> that is not final becomes a partial transcript, and <code class="docutils literal notranslate"><span class="pre">transcription.completed</span></code> becomes the final transcript with the language the service heard. A segment the service cuts at its maximum length (30 s for Qwen3-ASR) starts the partial text again; the final transcript joins every segment.</p>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>Option</p></th>
+<th class="head"><p>Type</p></th>
+<th class="head"><p>Default</p></th>
+<th class="head"><p>Effect</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">base_url</span></code></p></td>
+<td><p>string, <code class="docutils literal notranslate"><span class="pre">ws://</span></code> or <code class="docutils literal notranslate"><span class="pre">wss://</span></code></p></td>
+<td><p>required</p></td>
+<td><p>The ASR server.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">model</span></code></p></td>
+<td><p>string</p></td>
+<td><p>required</p></td>
+<td><p>Sent as the <code class="docutils literal notranslate"><span class="pre">model</span></code> query parameter.</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">language</span></code></p></td>
+<td><p>string</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code></p></td>
+<td><p>Sent as the session’s <code class="docutils literal notranslate"><span class="pre">language</span></code> hint when set.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">decode_interval_ms</span></code></p></td>
+<td><p>integer &gt; 0, or null</p></td>
+<td><p>null</p></td>
+<td><p>Audio between partial transcripts, sent in the session’s <code class="docutils literal notranslate"><span class="pre">session.update</span></code>; null keeps the server’s default (2000 ms for Qwen3-ASR), and the server refuses less than 200 ms.</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">api_key_env</span></code></p></td>
+<td><p>string</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">OPENAI_API_KEY</span></code></p></td>
+<td><p>As above.</p></td>
 </tr>
 <tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">timeout_s</span></code></p></td>
 <td><p>number &gt; 0</p></td>
@@ -2073,6 +2128,7 @@ interruption or reply-boundary detection to VoiceChat.</p>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#session-settings">Session settings</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#node-reference">Node Reference</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#realtime-transcription"><code class="docutils literal notranslate"><span class="pre">realtime_transcription</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#streaming-transcription"><code class="docutils literal notranslate"><span class="pre">streaming_transcription</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#openai-transcription"><code class="docutils literal notranslate"><span class="pre">openai_transcription</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#running-transcript"><code class="docutils literal notranslate"><span class="pre">running_transcript</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#dialog"><code class="docutils literal notranslate"><span class="pre">dialog</span></code></a></li>
