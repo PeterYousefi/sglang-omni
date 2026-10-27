@@ -165,17 +165,6 @@ def visible_gpus_need_flashinfer_cuda_norm(
     return False
 
 
-def sglang_flashinfer_cuda_arch(env: Mapping[str, str] | None = None) -> str | None:
-    """FLASHINFER_CUDA_ARCH_LIST as SGLang's model runner sets it for the first visible GPU."""
-    capability = get_compute_capability(0, env)
-    if capability is None:
-        return None
-    else:
-        pass
-    major, minor = capability
-    return f"{major}.{minor}{'a' if major >= 9 else ''}"
-
-
 def get_gpu_compat_env_defaults(
     env: Mapping[str, str] | None = None,
 ) -> dict[str, str]:
@@ -191,9 +180,12 @@ def get_gpu_compat_env_defaults(
     if source_env.get(_FLASHINFER_CUDA_ARCH_LIST) is None:
         # note (Junnan Li): on SM120 the model runner targets 12.0a and FlashInfer alone 12.0f in one
         # JIT cache, so stages with and without a model runner rebuild each other's ops.
-        cuda_arch = sglang_flashinfer_cuda_arch(source_env)
-        if cuda_arch is not None:
-            defaults[_FLASHINFER_CUDA_ARCH_LIST] = cuda_arch
+        capability = get_compute_capability(0, source_env)
+        if capability is not None:
+            major, minor = capability
+            defaults[_FLASHINFER_CUDA_ARCH_LIST] = (
+                f"{major}.{minor}{'a' if major >= 9 else ''}"
+            )
         else:
             pass
     else:
